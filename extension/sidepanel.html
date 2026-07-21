@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vigil</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">Vigil</div>
+      <p class="tag">Marque o trecho. Avisamos se mudar.</p>
+    </header>
+
+    <section id="view-login" class="panel hidden">
+      <label>
+        API
+        <input id="api-base" type="url" placeholder="http://localhost:3000" />
+      </label>
+      <button id="btn-google" type="button" class="primary google">Continuar com Google</button>
+      <p class="hint">Usamos seu e-mail do Google para avisar quando algo mudar.</p>
+
+      <div class="divider">ou link mágico</div>
+
+      <label>
+        E-mail
+        <input id="email" type="email" placeholder="voce@empresa.com" autocomplete="email" />
+      </label>
+      <button id="btn-magic" type="button">Enviar link mágico</button>
+      <p class="hint">No terminal da API aparece o link em modo desenvolvimento.</p>
+      <label>
+        Colar token do link
+        <input id="magic-token" type="text" placeholder="token do ?token=..." />
+      </label>
+      <button id="btn-exchange" type="button" class="ghost">Entrar com token</button>
+      <p id="login-msg" class="msg"></p>
+    </section>
+
+    <section id="view-app" class="panel hidden">
+      <div class="row between">
+        <span id="user-label" class="muted"></span>
+        <button id="btn-logout" type="button" class="ghost">Sair</button>
+      </div>
+
+      <div class="card" id="pen-card">
+        <h2>Caneta</h2>
+        <p class="muted">Circule com a caneta vermelha o texto, preço ou imagem que quer vigiar.</p>
+        <button id="btn-pen" type="button" class="primary">Ativar caneta nesta aba</button>
+        <p id="pen-msg" class="msg"></p>
+      </div>
+
+      <div class="card hidden" id="confirm-card">
+        <h2>Confirmar alerta</h2>
+        <p id="confirm-url" class="url"></p>
+        <blockquote id="confirm-text"></blockquote>
+        <label>
+          Quando avisar?
+          <select id="monitor-mode">
+            <option value="text_changed">Texto mudou</option>
+            <option value="text_appears">Texto apareceu</option>
+            <option value="text_disappears">Texto sumiu</option>
+          </select>
+        </label>
+        <label>
+          Intervalo (horas)
+          <input id="interval-hours" type="number" min="6" step="1" value="6" />
+        </label>
+        <label class="check">
+          <input id="notify-email" type="checkbox" checked />
+          Avisar por e-mail
+        </label>
+        <label>
+          Webhook (opcional)
+          <input id="webhook-url" type="url" placeholder="https://..." />
+        </label>
+        <div class="row">
+          <button id="btn-create" type="button" class="primary">Criar alerta</button>
+          <button id="btn-discard" type="button" class="ghost">Descartar</button>
+        </div>
+        <p id="create-msg" class="msg"></p>
+      </div>
+
+      <div class="card">
+        <div class="row between">
+          <h2>Seus alertas</h2>
+          <button id="btn-refresh" type="button" class="ghost">Atualizar</button>
+        </div>
+        <ul id="watch-list" class="list"></ul>
+        <p id="list-empty" class="muted hidden">Nenhum alerta ainda.</p>
+      </div>
+    </section>
+
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>
