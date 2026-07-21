@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vigil — saiba quando a página mudar</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/css/styles.css" />
+  </head>
+  <body class="page-landing">
+    <div class="noise" aria-hidden="true"></div>
+    <header class="site-header">
+      <a class="logo" href="/">Vigil</a>
+      <nav class="site-nav">
+        <a href="/login.html">Entrar</a>
+        <a class="btn btn-small" href="/login.html">Começar</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="brand-mark">Vigil</p>
+          <h1>A página muda.<br />Você fica sabendo.</h1>
+          <p class="lede">
+            Circule o trecho que importa, entre com Google e receba e-mail quando
+            mudar. Sem LLM. Sem adivinhação.
+          </p>
+          <div class="hero-actions">
+            <a class="btn" href="/login.html">Entrar com Google</a>
+            <a class="text-link" href="#how">Como funciona</a>
+          </div>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="monitor-frame">
+            <div class="monitor-chrome">
+              <span></span><span></span><span></span>
+              <code>carreiras.empresa.com</code>
+            </div>
+            <div class="monitor-body">
+              <div class="scan-line"></div>
+              <p class="diff-old">Backend Engineer — aberta</p>
+              <p class="diff-new">Data Analyst — aberta</p>
+              <p class="diff-meta">mudança detectada · e-mail enviado</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="how" class="how">
+        <h2>Três passos. Um sinal claro.</h2>
+        <ol class="steps">
+          <li>
+            <strong>Entre com Google</strong>
+            <span>Seu e-mail fica vinculado aos alertas e às notificações.</span>
+          </li>
+          <li>
+            <strong>Circule o trecho</strong>
+            <span>Na extensão, marque preço, texto ou imagem com a caneta.</span>
+          </li>
+          <li>
+            <strong>Receba o aviso</strong>
+            <span>Quando mudar, o Vigil manda e-mail (webhook opcional).</span>
+          </li>
+        </ol>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>Vigil · monitor de mudança</span>
+      <a href="/login.html">Abrir painel</a>
+    </footer>
+    <script type="module" src="/js/track.js"></script>
+    <script type="module">
+      import { trackPage } from "/js/track.js";
+      trackPage("/");
+    </script>
+  </body>
+</html>

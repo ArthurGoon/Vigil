@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Vigil",
+  "version": "0.2.0",
+  "description": "Marque um trecho na página e receba aviso quando mudar, aparecer ou sumir.",
+  "permissions": ["storage", "activeTab", "scripting", "sidePanel", "tabs", "identity"],
+  "host_permissions": ["http://localhost:3000/*", "http://127.0.0.1:3000/*", "https://*/*", "http://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Abrir Vigil"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

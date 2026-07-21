@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Painel — Vigil</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/css/styles.css" />
+  </head>
+  <body class="page-app">
+    <div class="noise" aria-hidden="true"></div>
+    <header class="site-header">
+      <a class="logo" href="/app.html">Vigil</a>
+      <div class="header-meta">
+        <span id="user-email" class="user-email"></span>
+        <button id="logout-btn" class="btn btn-ghost btn-small" type="button">Sair</button>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <section class="app-intro">
+        <h1>Seus alertas</h1>
+        <p class="lede">
+          Preferência: use a extensão Chrome com a caneta para marcar o trecho.
+          Aqui você gerencia alertas e pode criar um manualmente.
+        </p>
+      </section>
+
+      <section class="create-block" aria-labelledby="create-title">
+        <h2 id="create-title">Novo alerta</h2>
+        <form id="create-form" class="create-form">
+          <div class="field">
+            <label for="url">URL</label>
+            <input id="url" name="url" type="url" required placeholder="https://empresa.com/carreiras" />
+          </div>
+          <div class="field">
+            <label for="targetText">Trecho a monitorar</label>
+            <textarea
+              id="targetText"
+              name="targetText"
+              required
+              rows="3"
+              placeholder="Cole o texto exato que deve ser observado"
+            ></textarea>
+          </div>
+          <div class="field">
+            <label for="monitorMode">Quando avisar?</label>
+            <select id="monitorMode" name="monitorMode">
+              <option value="text_changed">Texto mudou</option>
+              <option value="text_appears">Texto apareceu</option>
+              <option value="text_disappears">Texto sumiu</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="cssSelector">Seletor CSS <span class="optional">(opcional)</span></label>
+            <input id="cssSelector" name="cssSelector" type="text" placeholder="#job-list" />
+          </div>
+          <div class="field">
+            <label for="webhookUrl">Webhook <span class="optional">(opcional)</span></label>
+            <input
+              id="webhookUrl"
+              name="webhookUrl"
+              type="url"
+              placeholder="https://webhook.site/..."
+            />
+          </div>
+          <div class="field field-narrow">
+            <label for="intervalMinutes">Intervalo (min)</label>
+            <input
+              id="intervalMinutes"
+              name="intervalMinutes"
+              type="number"
+              min="360"
+              value="360"
+              required
+            />
+          </div>
+          <label class="field-check">
+            <input id="notifyEmail" name="notifyEmail" type="checkbox" checked />
+            Avisar por e-mail
+          </label>
+          <button class="btn" type="submit">Criar alerta</button>
+        </form>
+        <p id="create-status" class="form-status" role="status"></p>
+      </section>
+
+      <section class="watches-block" aria-labelledby="list-title">
+        <div class="block-head">
+          <h2 id="list-title">Ativos</h2>
+          <button id="refresh-btn" class="btn btn-ghost btn-small" type="button">Atualizar</button>
+        </div>
+        <div id="watches-list" class="watches-list">
+          <p class="empty-hint">Carregando…</p>
+        </div>
+      </section>
+
+      <aside id="detail-panel" class="detail-panel hidden" aria-live="polite">
+        <div class="detail-head">
+          <h2>Detalhe</h2>
+          <button id="close-detail" class="btn btn-ghost btn-small" type="button">Fechar</button>
+        </div>
+        <p id="detail-url" class="detail-url"></p>
+        <div class="detail-actions">
+          <button id="check-btn" class="btn" type="button">Testar agora</button>
+          <button id="delete-btn" class="btn btn-danger" type="button">Remover</button>
+        </div>
+        <pre id="check-result" class="code-block"></pre>
+        <h3>Últimas mudanças</h3>
+        <ul id="changes-list" class="changes-list"></ul>
+      </aside>
+    </main>
+
+    <script type="module" src="/js/app.js"></script>
+  </body>
+</html>
