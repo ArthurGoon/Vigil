@@ -1,26 +1,10 @@
 import "dotenv/config";
 import { lt } from "drizzle-orm";
 import { db, sql } from "../db/client.js";
-import { events, type Watch } from "../db/schema.js";
+import { events } from "../db/schema.js";
 import { runWatchCheck } from "../domain/check.js";
 import { LIMITS } from "../lib/config.js";
-
-async function claimDueWatches(limit: number): Promise<Watch[]> {
-  const rows = await sql`
-    UPDATE watches
-    SET next_check_at = NOW() + INTERVAL '1 minute'
-    WHERE id IN (
-      SELECT id FROM watches
-      WHERE is_active = true
-        AND next_check_at <= NOW()
-      ORDER BY next_check_at ASC
-      FOR UPDATE SKIP LOCKED
-      LIMIT ${limit}
-    )
-    RETURNING *
-  `;
-  return rows as unknown as Watch[];
-}
+import { claimDueWatches } from "./claim.js";
 
 async function purgeOldEvents(): Promise<void> {
   const cutoff = new Date(Date.now() - LIMITS.eventRetentionDays * 24 * 60 * 60_000);
@@ -35,49 +19,18 @@ async function processBatch(): Promise<void> {
 
   await Promise.all(
     due.map(async (watch) => {
-      // Re-map snake_case from raw SQL to camel if needed
-      const normalized = normalizeWatch(watch);
-      const result = await runWatchCheck(normalized);
-      console.log(`[worker] ${normalized.id} → ${result.status}${result.error ? ` (${result.error})` : ""}`);
+      const result = await runWatchCheck(watch);
+      console.log(`[worker] ${watch.id} → ${result.status}${result.error ? ` (${result.error})` : ""}`);
     })
   );
 }
 
-function normalizeWatch(row: Record<string, unknown> | Watch): Watch {
-  if ("userId" in row && (row as Watch).userId && "monitorMode" in row) {
-    return row as Watch;
-  }
-  const r = row as Record<string, unknown>;
-  return {
-    id: String(r.id),
-    userId: String(r.user_id ?? (r as Watch).userId),
-    url: String(r.url),
-    cssSelector: (r.css_selector as string) ?? (r as Watch).cssSelector ?? null,
-    monitorMode: String(r.monitor_mode ?? (r as Watch).monitorMode ?? "text_changed"),
-    targetText: (r.target_text as string) ?? (r as Watch).targetText ?? null,
-    intervalMinutes: Number(r.interval_minutes ?? (r as Watch).intervalMinutes ?? 360),
-    webhookUrl: (r.webhook_url as string) ?? (r as Watch).webhookUrl ?? null,
-    notifyEmail:
-      r.notify_email === undefined
-        ? ((r as Watch).notifyEmail ?? true)
-        : Boolean(r.notify_email),
-    isActive: r.is_active === undefined ? Boolean((r as Watch).isActive ?? true) : Boolean(r.is_active),
-    lastCheckedAt: (r.last_checked_at as Date) ?? (r as Watch).lastCheckedAt ?? null,
-    lastChangedAt: (r.last_changed_at as Date) ?? (r as Watch).lastChangedAt ?? null,
-    lastManualCheckAt: (r.last_manual_check_at as Date) ?? (r as Watch).lastManualCheckAt ?? null,
-    lastStatus: String(r.last_status ?? (r as Watch).lastStatus ?? "ok"),
-    lastError: (r.last_error as string) ?? (r as Watch).lastError ?? null,
-    consecutiveErrors: Number(r.consecutive_errors ?? (r as Watch).consecutiveErrors ?? 0),
-    nextCheckAt: new Date(
-      (r.next_check_at as string | Date) ?? (r as Watch).nextCheckAt ?? Date.now()
-    ),
-    createdAt: new Date((r.created_at as string | Date) ?? (r as Watch).createdAt ?? Date.now()),
-  };
-}
-
 let ticks = 0;
+let stopping = false;
+let timer: NodeJS.Timeout | undefined;
+let running: Promise<void> = Promise.resolve();
 
-async function loop() {
+async function tick() {
   ticks += 1;
   try {
     await processBatch();
@@ -87,10 +40,28 @@ async function loop() {
     }
   } catch (err) {
     console.error("[worker] batch error", err);
-  } finally {
-    setTimeout(loop, LIMITS.workerPollMs);
   }
 }
+
+function loop() {
+  if (stopping) return;
+  running = tick().finally(() => {
+    if (!stopping) timer = setTimeout(loop, LIMITS.workerPollMs);
+  });
+}
+
+async function shutdown(signal: string) {
+  if (stopping) return;
+  stopping = true;
+  clearTimeout(timer);
+  console.log(`[worker] ${signal} received, finishing current batch…`);
+  await running;
+  await sql.end({ timeout: 5 });
+  process.exit(0);
+}
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 console.log(
   `Vigil worker starting (poll=${LIMITS.workerPollMs}ms, concurrency=${LIMITS.workerConcurrency})`
