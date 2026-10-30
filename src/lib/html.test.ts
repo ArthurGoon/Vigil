@@ -48,3 +48,31 @@ describe("summarizeDiff", () => {
     assert.match(summary, /line2/);
   });
 });
+
+describe("summarizeDiff format", () => {
+  it("keeps only the hunks, without file headers or newline noise", () => {
+    const summary = summarizeDiff("Backend Engineer\nData Analyst", "Backend Engineer\nML Engineer");
+    assert.match(summary, /^@@/);
+    assert.match(summary, /^-Data Analyst$/m);
+    assert.match(summary, /^\+ML Engineer$/m);
+    assert.doesNotMatch(summary, /No newline|\+\+\+ after/);
+  });
+
+  it("truncates long diffs", () => {
+    const summary = summarizeDiff("a\n", `${"b".repeat(5000)}\n`, 100);
+    assert.match(summary, /diff truncated/);
+  });
+});
+
+describe("extractFromHtml block separation", () => {
+  it("keeps adjacent blocks apart in minified HTML", () => {
+    const text = extractFromHtml("<body><ul><li>ML Engineer</li><li>Designer</li></ul><p>a<br>b</p></body>");
+    assert.equal(text, "ML Engineer\nDesigner\na\nb");
+  });
+
+  it("ignores indentation-only differences", () => {
+    const a = extractFromHtml("<body><div>\n      Price: 10\n</div></body>");
+    const b = extractFromHtml("<body><div>Price:   10</div></body>");
+    assert.equal(a, b);
+  });
+});
