@@ -117,7 +117,7 @@ async function loadWatches() {
       }[w.monitorMode] || w.monitorMode;
     li.innerHTML = `
       <div class="title">${escapeHtml((w.targetText || "").slice(0, 80))}</div>
-      <div class="meta">${escapeHtml(modeLabel)} · ${w.intervalMinutes} min · ${w.lastStatus || "—"}</div>
+      <div class="meta">${escapeHtml(modeLabel)} · ${w.intervalMinutes} min · ${w.lastStatus || "-"}</div>
       <div class="meta">${escapeHtml(w.url || "")}</div>
       <div class="actions">
         <button type="button" data-check="${w.id}">Checar agora</button>
@@ -201,7 +201,7 @@ els.btnMagic.addEventListener("click", async () => {
       } catch (_) {
         /* ignore */
       }
-      setMsg(els.loginMsg, "Dev: token preenchido — clique em Entrar com token.", "ok");
+      setMsg(els.loginMsg, "Dev: token preenchido. Clique em Entrar com token.", "ok");
     } else {
       setMsg(els.loginMsg, "Link enviado por e-mail. Cole o token do link abaixo.", "ok");
     }
@@ -246,7 +246,7 @@ els.btnPen.addEventListener("click", async () => {
 
     await ensureContentScript(tab.id);
     await chrome.tabs.sendMessage(tab.id, { type: "VIGIL_TOGGLE_PEN", active: true });
-    setMsg(els.penMsg, "Caneta ligada — circule o alvo em vermelho na página.", "ok");
+    setMsg(els.penMsg, "Caneta ligada: circule o alvo em vermelho na página.", "ok");
   } catch (err) {
     const msg = String(err?.message || err || "");
     if (/Receiving end does not exist|Could not establish connection/i.test(msg)) {

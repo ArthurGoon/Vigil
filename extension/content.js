@@ -64,7 +64,7 @@
       clearHighlight();
       hideConfirmBar();
       ensureCanvas();
-      showToast("Caneta vermelha — circule bem rente ao preço/texto/imagem");
+      showToast("Caneta vermelha: circule bem rente ao preço/texto/imagem");
     } else {
       teardownCanvas();
     }
@@ -168,13 +168,13 @@
     clearCanvas();
 
     if (!hit) {
-      showToast("Não achei bem o que você circulou — tente um traço mais rente");
+      showToast("Não achei bem o que você circulou, tente um traço mais rente");
       return;
     }
 
     const payload = buildPayload(hit);
     if (!payload.targetText || payload.targetText.length < 2 || /^[,.\-–—/%\sR$]+$/i.test(payload.targetText)) {
-      showToast("Seleção incompleta — circule o texto/preço inteiro");
+      showToast("Seleção incompleta: circule o texto/preço inteiro");
       return;
     }
 
@@ -714,7 +714,7 @@
       if (!bestRect || bestCov < 0.4) continue;
 
       const raw = String(node.textContent || "");
-      // If only part of a long text node is circled, still take the node text —
+      // If only part of a long text node is circled, still take the node text,
       // parent expansion will decide the unit. Prefer parent element's full line later.
       textHits.push({
         node,
@@ -887,7 +887,7 @@
         const extra = t.length - circled.length;
         score -= Math.min(1500, extra * 8);
       } else if (circled.includes(t) && t.length >= 4) {
-        score += 600; // container text is subset — partial
+        score += 600; // container text is subset, partial
         score -= (circled.length - t.length) * 10;
       } else {
         // similarity: shared prefix/ratio

@@ -143,7 +143,7 @@ main,
   text-underline-offset: 3px;
 }
 
-/* —— Landing —— */
+/* Landing */
 .hero {
   display: grid;
   grid-template-columns: 1.1fr 0.9fr;
@@ -333,7 +333,7 @@ main,
   color: var(--ink);
 }
 
-/* —— Auth —— */
+/* Auth */
 .auth-main {
   display: grid;
   place-items: center;
@@ -418,7 +418,7 @@ input:focus {
   font-size: 0.88rem;
 }
 
-/* —— App —— */
+/* App */
 .app-main {
   width: min(960px, calc(100% - 2.5rem));
   margin: 0 auto;

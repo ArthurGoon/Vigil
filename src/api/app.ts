@@ -199,7 +199,7 @@ function randomNonce(): string {
 }
 
 function googleErrorPage(message: string): string {
-  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"/><title>Vigil — login</title>
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"/><title>Vigil | login</title>
   <style>body{font-family:system-ui;background:#eef1ec;color:#14181c;padding:2rem}
   a{color:#14181c}</style></head><body>
   <h1>Não deu para entrar com Google</h1>
