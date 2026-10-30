@@ -7,7 +7,6 @@
     "dev": "tsx watch src/api/index.ts",
     "start": "tsx src/api/index.ts",
     "worker": "tsx src/worker/index.ts",
-    "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "test": "tsx --test \"src/**/*.test.ts\"",
