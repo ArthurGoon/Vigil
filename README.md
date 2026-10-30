@@ -4,7 +4,7 @@ Monitor de trechos de página. Você marca um pedaço de texto (uma vaga, um pre
 
 ![Painel do Vigil com três alertas detectando mudança](docs/painel.jpg)
 
-*Painel rodando localmente: um alerta de cada modo apontando para `fixtures/sample.html` servido em localhost, depois de trocar "Data Analyst" por "ML Engineer".*
+*Painel rodando localmente: um alerta de cada modo apontando para uma cópia de `fixtures/sample.html` servida em localhost, depois de trocar "Data Analyst" por "ML Engineer".*
 
 ## Arquitetura
 
