@@ -17,17 +17,18 @@
         API
         <input id="api-base" type="url" placeholder="http://localhost:3000" />
       </label>
-      <button id="btn-google" type="button" class="primary google">Continuar com Google</button>
-      <p class="hint">Usamos seu e-mail do Google para avisar quando algo mudar.</p>
-
-      <div class="divider">ou link mágico</div>
+      <div id="google-block" class="hidden">
+        <button id="btn-google" type="button" class="primary google">Continuar com Google</button>
+        <p class="hint">Usamos seu e-mail do Google para avisar quando algo mudar.</p>
+        <div class="divider">ou link mágico</div>
+      </div>
 
       <label>
         E-mail
         <input id="email" type="email" placeholder="voce@empresa.com" autocomplete="email" />
       </label>
       <button id="btn-magic" type="button">Enviar link mágico</button>
-      <p class="hint">No terminal da API aparece o link em modo desenvolvimento.</p>
+      <p class="hint">Rodando localmente, o token é preenchido sozinho (e aparece no terminal da API).</p>
       <label>
         Colar token do link
         <input id="magic-token" type="text" placeholder="token do ?token=..." />
@@ -62,8 +63,8 @@
           </select>
         </label>
         <label>
-          Intervalo (horas)
-          <input id="interval-hours" type="number" min="6" step="1" value="6" />
+          Intervalo (minutos)
+          <input id="interval-minutes" type="number" min="5" step="5" value="60" />
         </label>
         <label class="check">
           <input id="notify-email" type="checkbox" checked />

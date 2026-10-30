@@ -8,25 +8,21 @@ const statusEl = document.getElementById("login-status");
 const devBox = document.getElementById("dev-link-box");
 const devLink = document.getElementById("dev-link");
 const googleBtn = document.getElementById("google-btn");
-const googleHint = document.getElementById("google-hint");
+const googleDivider = document.getElementById("google-divider");
 
 initGoogle();
 
+// Google login is optional: the button only shows up when the server has
+// GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET.
 async function initGoogle() {
   try {
     const data = await api("/auth/google/config");
-    if (!data.enabled) {
-      googleBtn?.classList.add("is-disabled");
-      googleBtn?.setAttribute("aria-disabled", "true");
-      googleBtn?.addEventListener("click", (e) => {
-        e.preventDefault();
-        statusEl.className = "form-status error";
-        statusEl.textContent = "Google login ainda não configurado no servidor.";
-      });
-      googleHint?.classList.remove("hidden");
+    if (data.enabled) {
+      googleBtn?.classList.remove("hidden");
+      googleDivider?.classList.remove("hidden");
     }
   } catch {
-    googleHint?.classList.remove("hidden");
+    /* keep magic link only */
   }
 }
 
@@ -46,7 +42,7 @@ form.addEventListener("submit", async (event) => {
 
     statusEl.className = "form-status ok";
     statusEl.textContent = data.devLink
-      ? "Modo dev: use o link abaixo (também está no terminal da API)."
+      ? "Modo local: use o link abaixo (também está no terminal da API)."
       : "Link enviado. Confira seu e-mail.";
 
     if (data.devLink) {

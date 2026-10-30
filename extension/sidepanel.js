@@ -7,6 +7,7 @@ const els = {
   email: document.getElementById("email"),
   magicToken: document.getElementById("magic-token"),
   btnGoogle: document.getElementById("btn-google"),
+  googleBlock: document.getElementById("google-block"),
   btnMagic: document.getElementById("btn-magic"),
   btnExchange: document.getElementById("btn-exchange"),
   loginMsg: document.getElementById("login-msg"),
@@ -18,7 +19,7 @@ const els = {
   confirmUrl: document.getElementById("confirm-url"),
   confirmText: document.getElementById("confirm-text"),
   monitorMode: document.getElementById("monitor-mode"),
-  intervalHours: document.getElementById("interval-hours"),
+  intervalMinutes: document.getElementById("interval-minutes"),
   notifyEmail: document.getElementById("notify-email"),
   webhookUrl: document.getElementById("webhook-url"),
   btnCreate: document.getElementById("btn-create"),
@@ -232,6 +233,7 @@ els.btnExchange.addEventListener("click", async () => {
 els.btnLogout.addEventListener("click", async () => {
   await saveAuth({ sessionToken: null });
   showViews();
+  initGoogle();
 });
 
 els.btnPen.addEventListener("click", async () => {
@@ -303,8 +305,7 @@ els.btnDiscard.addEventListener("click", async () => {
 els.btnCreate.addEventListener("click", async () => {
   if (!state.pending) return;
   try {
-    const hours = Number(els.intervalHours.value || 6);
-    const intervalMinutes = Math.max(6, hours) * 60;
+    const intervalMinutes = Math.round(Number(els.intervalMinutes.value || 60));
     const webhook = els.webhookUrl.value.trim();
     await api("/watches", {
       method: "POST",
@@ -366,9 +367,20 @@ setInterval(() => {
   if (state.sessionToken) refreshPending().catch(() => {});
 }, 1500);
 
+// Google login is optional on the server; only offer it when configured.
+async function initGoogle() {
+  try {
+    const data = await api("/auth/google/config");
+    els.googleBlock?.classList.toggle("hidden", !data.enabled);
+  } catch (_) {
+    els.googleBlock?.classList.add("hidden");
+  }
+}
+
 (async () => {
   await loadState();
   showViews();
+  if (!state.sessionToken) initGoogle();
   if (state.sessionToken) {
     try {
       await loadWatches();

@@ -19,6 +19,7 @@ const changesList = document.getElementById("changes-list");
 
 let selectedId = null;
 let watches = [];
+let defaultInterval = 60;
 
 init();
 
@@ -31,7 +32,19 @@ async function init() {
     return;
   }
 
-  await loadWatches();
+  await Promise.all([loadLimits(), loadWatches()]);
+}
+
+async function loadLimits() {
+  try {
+    const limits = await api("/limits");
+    const input = document.getElementById("intervalMinutes");
+    input.min = String(limits.minIntervalMinutes);
+    defaultInterval = limits.defaultIntervalMinutes;
+    input.value = String(defaultInterval);
+  } catch {
+    /* keep HTML defaults */
+  }
 }
 
 logoutBtn.addEventListener("click", async () => {
@@ -52,7 +65,7 @@ createForm.addEventListener("submit", async (event) => {
     url: String(fd.get("url")),
     targetText: String(fd.get("targetText") || "").trim(),
     monitorMode: String(fd.get("monitorMode") || "text_changed"),
-    intervalMinutes: Number(fd.get("intervalMinutes") || 360),
+    intervalMinutes: Number(fd.get("intervalMinutes") || defaultInterval),
     notifyEmail: document.getElementById("notifyEmail").checked,
     webhookUrl: webhook || null,
   };
@@ -64,7 +77,7 @@ createForm.addEventListener("submit", async (event) => {
     createStatus.className = "form-status ok";
     createStatus.textContent = "Alerta criado.";
     createForm.reset();
-    document.getElementById("intervalMinutes").value = "360";
+    document.getElementById("intervalMinutes").value = String(defaultInterval);
     document.getElementById("notifyEmail").checked = true;
     await loadWatches();
   } catch (err) {
@@ -127,7 +140,7 @@ function renderWatches() {
             <div class="watch-meta">${escapeHtml(modeLabel(w.monitorMode))} · “${escapeHtml((w.targetText || "").slice(0, 48))}” · a cada ${w.intervalMinutes} min</div>
           </div>
           <span class="status-pill ${escapeHtml(w.lastStatus || "ok")}">${escapeHtml(w.lastStatus || "ok")}</span>
-          <span class="watch-meta">${w.lastCheckedAt ? formatDate(w.lastCheckedAt) : "nunca checado"}</span>
+          <span class="watch-meta">${w.lastCheckedAt ? formatDate(w.lastCheckedAt) : "nunca checado"}${w.lastChangedAt ? `<br />mudou em ${formatDate(w.lastChangedAt)}` : ""}</span>
         </button>
       `;
     })
