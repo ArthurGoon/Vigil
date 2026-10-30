@@ -56,16 +56,16 @@ export async function deliverEmail(
     "",
     "Trecho:",
     payload.preview,
-    "",
-    "— Vigil",
   ].join("\n");
 
+  // Local mode: no e-mail provider configured, the alert goes to the log
+  // (it is also listed in the web panel under the watch's changes).
   if (!apiKey) {
-    console.log(`[vigil:dev] Email to ${to}\n${subject}\n${text}`);
+    console.log(`\n[vigil] ALERTA para ${to} (RESEND_API_KEY vazio, só console)\n${subject}\n${text}\n`);
     return { ok: true };
   }
 
-  const from = process.env.MAGIC_LINK_FROM ?? "Vigil <onboarding@resend.dev>";
+  const from = process.env.MAGIC_LINK_FROM || "Vigil <onboarding@resend.dev>";
   try {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",

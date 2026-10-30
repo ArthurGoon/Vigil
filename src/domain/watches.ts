@@ -1,11 +1,17 @@
 import { and, count, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client.js";
-import { watches } from "../db/schema.js";
+import { snapshots, watches } from "../db/schema.js";
 import { LIMITS } from "../lib/config.js";
 import { track } from "../lib/events.js";
+import { MONITOR_MODES } from "./observation.js";
 
-export const MONITOR_MODES = ["text_changed", "text_appears", "text_disappears"] as const;
+export { MONITOR_MODES };
+
+const intervalSchema = z
+  .number()
+  .int()
+  .min(LIMITS.minIntervalMinutes, `Intervalo mínimo: ${LIMITS.minIntervalMinutes} min`);
 
 export const createWatchSchema = z
   .object({
@@ -13,11 +19,9 @@ export const createWatchSchema = z
     cssSelector: z.string().min(1).max(500).optional().nullable(),
     monitorMode: z.enum(MONITOR_MODES).default("text_changed"),
     targetText: z.string().min(2).max(2000),
-    intervalMinutes: z
-      .number()
-      .int()
-      .min(LIMITS.minIntervalMinutes)
-      .default(LIMITS.minIntervalMinutes),
+    intervalMinutes: intervalSchema.default(
+      Math.max(LIMITS.defaultIntervalMinutes, LIMITS.minIntervalMinutes)
+    ),
     webhookUrl: z.string().url().optional().nullable(),
     notifyEmail: z.boolean().optional().default(true),
     isActive: z.boolean().optional().default(true),
@@ -31,7 +35,7 @@ export const updateWatchSchema = z.object({
   cssSelector: z.string().min(1).max(500).nullable().optional(),
   monitorMode: z.enum(MONITOR_MODES).optional(),
   targetText: z.string().min(2).max(2000).optional(),
-  intervalMinutes: z.number().int().min(LIMITS.minIntervalMinutes).optional(),
+  intervalMinutes: intervalSchema.optional(),
   webhookUrl: z.string().url().nullable().optional(),
   notifyEmail: z.boolean().optional(),
   isActive: z.boolean().optional(),
@@ -44,7 +48,7 @@ export async function createWatch(userId: string, input: z.infer<typeof createWa
     .where(eq(watches.userId, userId));
 
   if (Number(existing) >= LIMITS.maxWatchesPerUser) {
-    throw new WatchLimitError(`Max ${LIMITS.maxWatchesPerUser} watches per user`);
+    throw new WatchLimitError(`Limite de ${LIMITS.maxWatchesPerUser} alertas por usuário`);
   }
 
   const [row] = await db
@@ -81,9 +85,17 @@ export async function updateWatch(
   watchId: string,
   input: z.infer<typeof updateWatchSchema>
 ) {
+  // Changing what is observed invalidates the old snapshots: start a new baseline.
+  const retarget =
+    input.url !== undefined ||
+    input.cssSelector !== undefined ||
+    input.monitorMode !== undefined ||
+    input.targetText !== undefined;
+
   const [row] = await db
     .update(watches)
     .set({
+      ...(retarget ? { nextCheckAt: new Date(), lastStatus: "ok", lastError: null } : {}),
       ...(input.url !== undefined ? { url: input.url } : {}),
       ...(input.cssSelector !== undefined ? { cssSelector: input.cssSelector } : {}),
       ...(input.monitorMode !== undefined ? { monitorMode: input.monitorMode } : {}),
@@ -97,6 +109,9 @@ export async function updateWatch(
     .returning();
 
   if (!row) throw new NotFoundError("Watch not found");
+  if (retarget) {
+    await db.delete(snapshots).where(eq(snapshots.watchId, row.id));
+  }
   return row;
 }
 

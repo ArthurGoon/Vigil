@@ -33,11 +33,11 @@ export async function requestMagicLink(email: string): Promise<{ devLink?: strin
 async function sendMagicLinkEmail(to: string, link: string): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
-    console.log(`[vigil:dev] Magic link for ${to}: ${link}`);
+    console.log(`[vigil] Link de login para ${to} (RESEND_API_KEY vazio): ${link}`);
     return;
   }
 
-  const from = process.env.MAGIC_LINK_FROM ?? "Vigil <onboarding@resend.dev>";
+  const from = process.env.MAGIC_LINK_FROM || "Vigil <onboarding@resend.dev>";
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {

@@ -17,6 +17,7 @@ import {
   verifyGoogleIdToken,
 } from "../domain/googleAuth.js";
 import { getWatchForUser, listWatches, runWatchCheck } from "../domain/check.js";
+import { manualCheckWaitSeconds } from "../domain/schedule.js";
 import {
   NotFoundError,
   RateLimitError,
@@ -29,7 +30,7 @@ import {
 } from "../domain/watches.js";
 import { db } from "../db/client.js";
 import { changeEvents, snapshots } from "../db/schema.js";
-import { LIMITS } from "../lib/config.js";
+import { LIMITS, appUrl } from "../lib/config.js";
 import { hashIp, hashUa } from "../lib/crypto.js";
 import { EVENT_NAMES, isEventName, track, trackMany } from "../lib/events.js";
 import {
@@ -44,16 +45,33 @@ import {
 export const app = new Hono<{ Variables: AppVariables }>();
 
 app.use("*", logger());
+// The web UI is same-origin; the extension sends a Bearer token. Only those
+// origins may make credentialed cross-origin calls.
 app.use(
   "*",
   cors({
-    origin: (origin) => origin || "*",
+    origin: (origin) => {
+      if (!origin) return null;
+      if (origin === new URL(appUrl()).origin) return origin;
+      if (origin.startsWith("chrome-extension://")) return origin;
+      return null;
+    },
     credentials: true,
   })
 );
 app.use("*", sessionMiddleware);
 
 app.get("/health", (c) => c.json({ ok: true, service: "vigil" }));
+
+app.get("/limits", (c) =>
+  c.json({
+    ok: true,
+    minIntervalMinutes: LIMITS.minIntervalMinutes,
+    defaultIntervalMinutes: Math.max(LIMITS.defaultIntervalMinutes, LIMITS.minIntervalMinutes),
+    maxWatchesPerUser: LIMITS.maxWatchesPerUser,
+    manualCheckCooldownSeconds: LIMITS.manualCheckCooldownSeconds,
+  })
+);
 
 app.get("/auth/google/config", (c) => {
   if (!googleConfigured()) {
@@ -119,13 +137,6 @@ app.get("/auth/google/callback", async (c) => {
     writeSessionCookie(c, result.sessionToken);
 
     const next = state.r && state.r.startsWith("/") && !state.r.startsWith("//") ? state.r : "/app.html";
-    // Extension bridge page can read token from query when opened in launchWebAuthFlow... 
-    // For web, just redirect.
-    if (state.m === "extension_bridge") {
-      return c.redirect(
-        `/auth/extension-bridge.html?sessionToken=${encodeURIComponent(result.sessionToken)}&email=${encodeURIComponent(result.email)}`
-      );
-    }
     return c.redirect(next);
   } catch (e) {
     console.error("[auth/google/callback]", e);
@@ -283,13 +294,9 @@ app.post("/watches/:id/check", async (c) => {
 
   await track({ name: "watch_check_clicked", userId: user.id, props: { watchId: watch.id } });
 
-  if (watch.lastManualCheckAt) {
-    const elapsed = Date.now() - new Date(watch.lastManualCheckAt).getTime();
-    if (elapsed < LIMITS.manualCheckCooldownMinutes * 60_000) {
-      throw new RateLimitError(
-        `Manual check limited to once per ${LIMITS.manualCheckCooldownMinutes} minutes`
-      );
-    }
+  const wait = manualCheckWaitSeconds(watch.lastManualCheckAt, new Date());
+  if (wait > 0) {
+    throw new RateLimitError(`Aguarde ${wait}s para checar este alerta de novo`);
   }
 
   const result = await runWatchCheck(watch, { manual: true, userId: user.id });
@@ -398,7 +405,13 @@ app.onError((err, c) => {
     return c.json({ ok: false, error: err.message }, err.status as 400);
   }
   if (err instanceof z.ZodError) {
-    return c.json({ ok: false, error: err.flatten() }, 400);
+    const message = err.issues
+      .map((i) => (i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message))
+      .join("; ");
+    return c.json({ ok: false, error: message, details: err.flatten() }, 400);
+  }
+  if (err instanceof SyntaxError) {
+    return c.json({ ok: false, error: "JSON inválido" }, 400);
   }
   console.error(err);
   return c.json({ ok: false, error: err instanceof Error ? err.message : "Internal error" }, 500);
