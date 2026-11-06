@@ -128,6 +128,7 @@ a {
 }
 
 .conn {
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -1097,5 +1098,11 @@ code,
 
   .topbar {
     padding: 0 16px;
+  }
+}
+
+@media (max-width: 520px) {
+  .conn {
+    display: none;
   }
 }

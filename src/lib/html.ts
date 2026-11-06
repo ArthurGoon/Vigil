@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import * as cheerio from "cheerio";
+import { Agent, fetch } from "undici";
 import { LIMITS } from "../config.js";
 
 export type FetchResult = {
@@ -150,10 +151,18 @@ function decode(buf: Buffer, charset: string): string {
 export const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 Vigil/1.0 (+https://github.com/ArthurGoon/Vigil)";
 
+/**
+ * HTTP/2 when the site offers it. Some sites answer HTTP/1.1 clients that do
+ * not look like a browser with an error page (Hacker News returns 419), and
+ * the global fetch in Node only speaks HTTP/1.1.
+ */
+const dispatcher = new Agent({ allowH2: true });
+
 export async function fetchPage(url: string): Promise<FetchResult> {
-  let response: Response;
+  let response: Awaited<ReturnType<typeof fetch>>;
   try {
     response = await fetch(url, {
+      dispatcher,
       signal: AbortSignal.timeout(LIMITS.fetchTimeoutMs),
       headers: {
         "User-Agent": USER_AGENT,

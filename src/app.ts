@@ -11,6 +11,17 @@ import { manualCheckWaitSeconds } from "./domain/schedule.js";
 import { createWatch, updateWatch } from "./domain/watches.js";
 import { diffRows } from "./lib/diff.js";
 
+const FIELD_NAMES: Record<string, string> = {
+  url: "Endereço",
+  label: "Nome",
+  targetText: "Trecho",
+  cssSelector: "Seletor",
+  monitorMode: "Modo",
+  intervalMinutes: "Intervalo",
+  webhookUrl: "Webhook",
+  isActive: "Ativo",
+};
+
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
 class HttpError extends Error {
@@ -191,8 +202,11 @@ export function createApp({ store, checker, pages, webDir = join(ROOT_DIR, "web"
     if (err instanceof AlreadyCheckingError) return c.json({ error: err.message }, 409);
     if (err instanceof z.ZodError) {
       const message = err.issues
-        .map((i) => (i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message))
-        .join("; ");
+        .map((i) => {
+          const field = FIELD_NAMES[String(i.path[0])];
+          return field ? `${field}: ${i.message}` : i.message;
+        })
+        .join(". ");
       return c.json({ error: message }, 400);
     }
     // Probe fetch errors are user facing ("A página respondeu HTTP 404").

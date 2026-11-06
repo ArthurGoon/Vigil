@@ -288,6 +288,7 @@
     if (/^(css|sc|jsx|svelte|emotion|chakra|mui|tw|styled)-/i.test(s)) return false;
     if (/[_-][a-z0-9]{5,}$/i.test(s) && /\d/.test(s.slice(-6)) ) return false; // CSS modules hash: button_x3k2a
     if (!/-|_/.test(s) && /[a-z]/.test(s) && /[A-Z]/.test(s) && /\d/.test(s)) return false; // aB3dE
+    if (!/-|_/.test(s) && s.length <= 6 && /[a-z][A-Z]/.test(s)) return false; // generated short ids: mwAg (Wikipedia)
     return /^[a-zA-Z_][\w-]*$/.test(s);
   }
 
@@ -457,7 +458,7 @@
     .head .title { font-weight: 650; font-size: 14px; letter-spacing: -.01em; flex: 1; }
     .icon-btn { all: unset; cursor: pointer; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--text-3); }
     .icon-btn:hover { background: var(--bg-3); color: var(--text); }
-    .body { padding: 12px 16px 16px; display: grid; gap: 14px; }
+    .body { padding: 12px 16px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
     .preview { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
     .preview .text { font-size: 13px; color: var(--text); max-height: 7.4em; overflow: hidden; position: relative; word-break: break-word;
       -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
@@ -482,7 +483,7 @@
     .seg button:hover { color: var(--text); }
     .seg button[aria-pressed="true"] { background: var(--bg); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 0 0 1px var(--line); }
     .help { font-size: 12px; color: var(--text-3); }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
     input, select { all: unset; box-sizing: border-box; width: 100%; font-size: 13px; color: var(--text); background: var(--bg);
       border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 10px; }
     select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238d8f94' stroke-width='1.5'/%3E%3C/svg%3E");

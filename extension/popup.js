@@ -72,7 +72,7 @@ function dotClass(w) {
 function metaLine(w) {
   if (!w.isActive) return el("div", { class: "item-meta" }, `Pausado · ${host(w.url)}`);
   if (w.lastStatus === "error") return el("div", { class: "item-meta err", title: w.lastError || "" }, `Erro: ${w.lastError || "falhou"}`);
-  const checked = w.checking || busy.has(w.id) ? "checando..." : w.lastCheckedAt ? `checado ${ago(w.lastCheckedAt)}` : "esperando a 1ª leitura";
+  const checked = w.checking || busy.has(w.id) ? "checando..." : w.lastCheckedAt ? ago(w.lastCheckedAt) : "esperando a 1ª leitura";
   return el("div", { class: "item-meta" }, `${host(w.url)} · ${MODE[w.monitorMode]} · ${checked}`);
 }
 
