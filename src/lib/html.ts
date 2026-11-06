@@ -53,7 +53,23 @@ export function loadClean(html: string, opts: { keepChrome?: boolean } = {}): Ro
   // Minified HTML has no whitespace between blocks: "<li>A</li><li>B</li>" would read "AB".
   $("br").replaceWith("\n");
   $(BLOCK_TAGS).after("\n");
+  separateAdjacentWords($);
   return $;
+}
+
+/**
+ * "<span>Pleno</span><span>Remoto</span>" is laid out apart by CSS (flex,
+ * margins) but reads "PlenoRemoto" as text. Add a space where two sibling
+ * elements touch letter to letter; "1.899" + ",90" stays glued.
+ */
+function separateAdjacentWords($: Root): void {
+  $("body *").each((_, el) => {
+    const next = (el as { next?: { type?: string } | null }).next;
+    if (!next || next.type !== "tag") return;
+    const a = $(el).text();
+    const b = $(next as Parameters<Root>[0]).text();
+    if (/[\p{L}\p{N}]$/u.test(a) && /^[\p{L}\p{N}]/u.test(b)) $(el).after(" ");
+  });
 }
 
 function imageText($: Root, el: Parameters<Root>[0]): string {

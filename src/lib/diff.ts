@@ -1,4 +1,4 @@
-import { createTwoFilesPatch, diffLines, diffWordsWithSpace } from "diff";
+import { createTwoFilesPatch, diffArrays, diffLines } from "diff";
 
 const withNewline = (text: string) => (text.endsWith("\n") ? text : `${text}\n`);
 
@@ -29,14 +29,23 @@ function splitLines(text: string): string[] {
   return lines;
 }
 
+/** Splits on whitespace only, so "R$ 1.899,90" changes as whole tokens, not "899". */
+const tokens = (text: string) => text.split(/(\s+)/).filter(Boolean);
+
 function wordSegments(before: string, after: string): { before: Segment[]; after: Segment[] } {
   const out = { before: [] as Segment[], after: [] as Segment[] };
-  for (const part of diffWordsWithSpace(before, after)) {
-    if (part.added) out.after.push([1, part.value]);
-    else if (part.removed) out.before.push([1, part.value]);
+  const push = (list: Segment[], marked: 0 | 1, text: string) => {
+    const last = list[list.length - 1];
+    if (last && last[0] === marked) last[1] += text;
+    else list.push([marked, text]);
+  };
+  for (const part of diffArrays(tokens(before), tokens(after))) {
+    const text = part.value.join("");
+    if (part.added) push(out.after, 1, text);
+    else if (part.removed) push(out.before, 1, text);
     else {
-      out.before.push([0, part.value]);
-      out.after.push([0, part.value]);
+      push(out.before, 0, text);
+      push(out.after, 0, text);
     }
   }
   return out;
@@ -90,16 +99,25 @@ function clip(text: string, max: number): string {
   return t.length > max ? `${t.slice(0, max - 3).trimEnd()}...` : t;
 }
 
+/** Text from the first to the last marked segment, keeping the common words in between. */
+function changedSpan(segs: Segment[]): string {
+  const first = segs.findIndex(([marked]) => marked === 1);
+  if (first < 0) return "";
+  let last = first;
+  segs.forEach(([marked], i) => {
+    if (marked === 1) last = i;
+  });
+  return segs
+    .slice(first, last + 1)
+    .map(([, text]) => text)
+    .join("");
+}
+
 /** One line for notifications: what left and what came in. */
 export function shortSummary(before: string, after: string, max = 120): string {
-  const removed: string[] = [];
-  const added: string[] = [];
-  for (const part of diffWordsWithSpace(before, after)) {
-    if (part.added) added.push(part.value);
-    else if (part.removed) removed.push(part.value);
-  }
-  const out = clip(removed.join(" "), max);
-  const inn = clip(added.join(" "), max);
+  const segs = wordSegments(before, after);
+  const out = clip(changedSpan(segs.before), max);
+  const inn = clip(changedSpan(segs.after), max);
   if (out && inn) return `“${out}” virou “${inn}”`;
   if (inn) return `Entrou: “${inn}”`;
   if (out) return `Saiu: “${out}”`;

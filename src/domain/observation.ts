@@ -90,13 +90,29 @@ export function findText(page: string, target: string): { index: number; length:
   return match ? { index: match.index, length: match[0].length } : null;
 }
 
+/**
+ * Start of the target used to find it again: a long target that changed in
+ * the middle can still be located by how it begins, so the diff shows the
+ * edit instead of "the text is gone".
+ */
+export function anchorOf(target: string, minChars = 24, maxWords = 8): string {
+  const words = normalizeText(target).split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  for (const w of words) {
+    out.push(w);
+    if (out.join(" ").length >= minChars || out.length >= maxWords) break;
+  }
+  return out.join(" ");
+}
+
 /** Window of text around the target, used by "mudou" when there is no selector. Empty if the target is gone. */
 export function extractAround(page: string, target: string, radius = 80): string {
   if (!target) return page.slice(0, 500);
-  const hit = findText(page, target);
+  const hit = findText(page, target) ?? findText(page, anchorOf(target));
   if (!hit) return "";
+  const length = Math.max(hit.length, normalizeText(target).length);
   const start = Math.max(0, hit.index - radius);
-  const end = Math.min(page.length, hit.index + hit.length + radius);
+  const end = Math.min(page.length, hit.index + length + radius);
   return page.slice(start, end).trim();
 }
 

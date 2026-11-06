@@ -176,3 +176,17 @@ describe("extractAround", () => {
     assert.equal(extractAround(page, "TARGET", 3), "aaaTARGETbbb");
   });
 });
+
+describe("text_changed without selector, long target", () => {
+  const target = "Inscrições para o processo seletivo de 2027 abertas até 30 de novembro";
+  const watch: WatchTarget = { monitorMode: "text_changed", targetText: target, cssSelector: null };
+  const page = (t: string) => `<body><h1>Edital</h1><p>${t}</p><p>Contato: rh@exemplo.com</p></body>`;
+
+  it("finds the target by how it begins and diffs the edit", () => {
+    const edited = target.replace("30 de novembro", "15 de dezembro");
+    const [, second] = simulate(watch, [page(target), page(edited)]);
+    assert.equal(second.notify, true);
+    assert.match(second.observation.excerpt, /15 de dezembro/);
+    assert.match(second.change?.summary ?? "", /15 de dezembro/);
+  });
+});

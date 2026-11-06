@@ -71,3 +71,10 @@ describe("extractFromHtml block separation", () => {
     assert.equal(a, b);
   });
 });
+
+describe("extractFromHtml inline neighbours", () => {
+  it("keeps words in sibling elements apart, but not price pieces", () => {
+    const html = "<body><li><span>Engenharia de Dados Pleno</span><span>Remoto</span></li><p><span>1.899</span><span>,90</span></p></body>";
+    assert.equal(extractFromHtml(html), "Engenharia de Dados Pleno Remoto\n1.899,90");
+  });
+});

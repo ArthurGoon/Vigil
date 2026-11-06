@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>Monitor 27" QHD | Loja Exemplo</title>
+    <style>
+      body { margin: 0; font: 15px/1.5 system-ui, sans-serif; color: #222; background: #fff; }
+      .bar { background: #ffe14d; padding: 14px 40px; font-weight: 700; }
+      .wrap { max-width: 980px; margin: 40px auto; display: grid; grid-template-columns: 1fr 1fr; gap: 48px; padding: 0 24px; }
+      .photo { aspect-ratio: 1; background: linear-gradient(135deg, #e9edf3, #cfd6e2); border-radius: 12px; display: grid; place-items: center; color: #7a8599; }
+      h1 { font-size: 26px; margin: 0 0 12px; font-weight: 600; }
+      .old { color: #888; text-decoration: line-through; font-size: 14px; }
+      .price { font-size: 40px; font-weight: 300; margin: 4px 0; }
+      .price .cents { font-size: 20px; vertical-align: super; }
+      .installments { color: #00a650; }
+      .stock { margin-top: 18px; font-weight: 600; }
+      button { margin-top: 24px; background: #3483fa; color: #fff; border: 0; padding: 14px 28px; border-radius: 8px; font-size: 16px; }
+    </style>
+  </head>
+  <body>
+    <div class="bar">Loja Exemplo</div>
+    <div class="wrap">
+      <div class="photo">foto do produto</div>
+      <div>
+        <h1>Monitor 27" QHD 165 Hz IPS</h1>
+        <div class="old">R$ 2.199,00</div>
+        <div class="price" data-testid="price"><span class="currency">R$</span> <span class="fraction">1.899</span><span class="cents">,90</span></div>
+        <div class="installments">em 10x R$ 189,99 sem juros</div>
+        <div class="stock">Últimas 3 unidades</div>
+        <button>Comprar</button>
+      </div>
+    </div>
+  </body>
+</html>

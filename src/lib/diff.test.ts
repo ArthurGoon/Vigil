@@ -26,11 +26,11 @@ describe("diffRows", () => {
     if (change.type !== "change") return;
     assert.deepEqual(
       change.before.filter(([marked]) => marked).map(([, t]) => t),
-      ["365"]
+      ["365,90"]
     );
     assert.deepEqual(
       change.after.filter(([marked]) => marked).map(([, t]) => t),
-      ["329"]
+      ["329,90"]
     );
   });
 
@@ -60,5 +60,11 @@ describe("shortSummary", () => {
   it("handles pure additions and removals", () => {
     assert.equal(shortSummary("a b", "a b c"), "Entrou: “c”");
     assert.equal(shortSummary("a b c", "a b"), "Saiu: “c”");
+  });
+});
+
+describe("shortSummary with numbers", () => {
+  it("keeps prices whole", () => {
+    assert.equal(shortSummary("R$ 1.899,90", "R$ 1.749,90"), "“1.899,90” virou “1.749,90”");
   });
 });

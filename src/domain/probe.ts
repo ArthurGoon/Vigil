@@ -28,6 +28,19 @@ export type ProbeResult = {
 
 const squash = (s: string) => foldText(s).replace(/\s+/g, "");
 
+/**
+ * Share of the captured words that exist in the element's text. The browser
+ * and cheerio do not agree on text order and spacing in every layout, so the
+ * selector check is by words, not by one contiguous string.
+ */
+export function wordCoverage(captured: string, text: string): number {
+  const words = foldText(captured).split(" ").filter((w) => w.length > 1 || /\w/.test(w));
+  if (!words.length) return 0;
+  const haystack = squash(text);
+  const found = words.filter((w) => haystack.includes(w.replace(/\s+/g, ""))).length;
+  return found / words.length;
+}
+
 type CacheEntry = { at: number; page: Promise<FetchResult> };
 const CACHE_MS = 60_000;
 
@@ -59,7 +72,7 @@ export function probeHtml(html: string, selectors: string[], text: string): Prob
     return {
       selector,
       matches: found?.count ?? 0,
-      hasText: Boolean(found && wanted && squash(found.text).includes(wanted)),
+      hasText: Boolean(found && wanted && (squash(found.text).includes(wanted) || wordCoverage(text, found.text) >= 0.8)),
       text: found?.text ?? "",
     };
   });

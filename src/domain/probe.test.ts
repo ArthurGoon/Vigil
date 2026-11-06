@@ -48,3 +48,11 @@ describe("probeHtml", () => {
     assert.equal(result.selector, "#price");
   });
 });
+
+describe("wordCoverage", () => {
+  it("accepts the captured words in another order or spacing", async () => {
+    const { wordCoverage } = await import("./probe.js");
+    assert.equal(wordCoverage("Dados Pleno Analista de Dados", "Engenharia de Dados Pleno\nRemoto\nAnalista de Dados Júnior"), 1);
+    assert.ok(wordCoverage("Product Designer", "Backend Engineer") < 0.5);
+  });
+});

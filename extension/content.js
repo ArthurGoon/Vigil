@@ -1,1313 +1,1017 @@
+// Vigil pen: injected on demand (toolbar, Alt+Shift+V or context menu).
+// The user circles part of the page; we work out which element they meant,
+// ask the local server whether it can see the same thing, and save the watch.
 (() => {
-  if (window.__vigilContentLoaded) {
-    // allow reinjection after extension reload
-    window.__vigilContentReset?.();
+  const previous = window.__vigilPen;
+  if (previous) {
+    if (previous.alive()) return;
+    previous.destroy(); // left behind by an extension reload
   }
-  window.__vigilContentLoaded = true;
 
-  const PEN_COLOR = "#e11d2e";
-  const MIN_POINTS = 8;
-  const MIN_PATH_LEN = 36;
-  const PRICE_RE =
-    /(?:r\$\s*)?\d{1,3}(?:\.\d{3})*(?:,\d{2})?(?:\s*%|\s*off)?|(?:r\$\s*)?\d+(?:[.,]\d{2})/i;
+  const MODES = {
+    text_changed: { label: "mudar", hint: "Compara o trecho a cada checagem e mostra o que mudou." },
+    text_appears: { label: "aparecer", hint: "Procura o texto na página inteira e avisa quando ele aparecer." },
+    text_disappears: { label: "sumir", hint: "Procura o texto na página inteira e avisa quando ele sumir." },
+  };
+  const INTERVALS = [
+    [5, "5 min"],
+    [15, "15 min"],
+    [30, "30 min"],
+    [60, "1 hora"],
+    [360, "6 horas"],
+    [1440, "1 dia"],
+  ];
+  const TAG_NAMES = {
+    P: "parágrafo", LI: "item de lista", UL: "lista", OL: "lista", DL: "lista", TABLE: "tabela", TR: "linha da tabela",
+    TD: "célula", TH: "célula", H1: "título", H2: "título", H3: "título", H4: "título", H5: "título", H6: "título",
+    A: "link", BUTTON: "botão", IMG: "imagem", PICTURE: "imagem", SPAN: "texto", B: "texto", STRONG: "texto",
+    EM: "texto", SMALL: "texto", LABEL: "texto", TIME: "data", ARTICLE: "bloco", SECTION: "seção", ASIDE: "bloco",
+    MAIN: "conteúdo principal", HEADER: "cabeçalho", FOOTER: "rodapé", NAV: "menu", FORM: "formulário",
+    FIGURE: "figura", BLOCKQUOTE: "citação", PRE: "bloco de código", CODE: "código",
+  };
 
-  let penActive = false;
+  // State
+
+  let host = null;
+  let root = null;
+  let ui = {};
+  let penOn = false;
   let drawing = false;
   let points = [];
-  let canvas = null;
-  let ctx = null;
-  let toastEl = null;
-  let highlightEl = null;
-  let confirmBar = null;
-  let pendingLocal = null;
-  let highlightTimer = null;
-  let messageListener = null;
+  let target = null; // { el, captured, original, history: [] }
+  let mode = "text_changed";
+  let interval = 60;
+  let probeState = { status: "idle" };
+  let probeSeq = 0;
+  let saving = false;
+  let followRaf = 0;
 
-  window.__vigilContentReset = () => {
-    teardownCanvas();
-    clearHighlight();
-    hideConfirmBar();
-    toastEl?.remove();
-    toastEl = null;
-    if (messageListener) {
-      chrome.runtime.onMessage.removeListener(messageListener);
-      messageListener = null;
-    }
-  };
+  // Small helpers
 
-  messageListener = (message, _sender, sendResponse) => {
-    if (message?.type === "VIGIL_TOGGLE_PEN") {
-      setPenActive(Boolean(message.active));
-      sendResponse({ ok: true, active: penActive });
-      return true;
-    }
-    if (message?.type === "VIGIL_PEN_STATUS") {
-      sendResponse({ ok: true, active: penActive });
-      return true;
-    }
-    if (message?.type === "VIGIL_CLEAR_HIGHLIGHT") {
-      pendingLocal = null;
-      clearHighlight();
-      hideConfirmBar();
-      sendResponse({ ok: true });
-      return true;
-    }
-    return false;
-  };
-  chrome.runtime.onMessage.addListener(messageListener);
-
-  function setPenActive(on) {
-    penActive = on;
-    document.documentElement.classList.toggle("vigil-pen-on", on);
-    if (on) {
-      pendingLocal = null;
-      clearHighlight();
-      hideConfirmBar();
-      ensureCanvas();
-      showToast("Caneta vermelha: circule bem rente ao preço/texto/imagem");
-    } else {
-      teardownCanvas();
-    }
-  }
-
-  function ensureCanvas() {
-    if (canvas) {
-      resizeCanvas();
-      return;
-    }
-    canvas = document.createElement("canvas");
-    canvas.className = "vigil-pen-canvas";
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    document.documentElement.appendChild(canvas);
-    ctx = canvas.getContext("2d");
-    canvas.addEventListener("pointerdown", onPointerDown, { passive: false });
-    canvas.addEventListener("pointermove", onPointerMove, { passive: false });
-    canvas.addEventListener("pointerup", onPointerUp, { passive: false });
-    canvas.addEventListener("pointercancel", onPointerUp, { passive: false });
-    window.addEventListener("resize", resizeCanvas);
-    window.addEventListener("scroll", onScrollWhilePen, true);
-  }
-
-  function teardownCanvas() {
-    if (!canvas) return;
-    canvas.removeEventListener("pointerdown", onPointerDown);
-    canvas.removeEventListener("pointermove", onPointerMove);
-    canvas.removeEventListener("pointerup", onPointerUp);
-    canvas.removeEventListener("pointercancel", onPointerUp);
-    window.removeEventListener("resize", resizeCanvas);
-    window.removeEventListener("scroll", onScrollWhilePen, true);
-    canvas.remove();
-    canvas = null;
-    ctx = null;
-    drawing = false;
-    points = [];
-  }
-
-  function resizeCanvas() {
-    if (!canvas) return;
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    redrawStroke();
-  }
-
-  function onScrollWhilePen() {
-    if (drawing || !highlightEl || !pendingLocal) return;
-    const el = pendingLocal.element;
-    if (el?.isConnected) {
-      const box =
-        computeHighlightRect(el, pendingLocal.textHits, pendingLocal.targetText) ||
-        el.getBoundingClientRect();
-      placeHighlight(box);
-    }
-  }
-
-  function onPointerDown(e) {
-    if (!penActive || e.button !== 0) return;
-    e.preventDefault();
-    drawing = true;
-    points = [{ x: e.clientX, y: e.clientY }];
-    canvas.setPointerCapture(e.pointerId);
-    clearCanvas();
-    hideConfirmBar();
-    clearHighlight();
-    pendingLocal = null;
-  }
-
-  function onPointerMove(e) {
-    if (!drawing) return;
-    e.preventDefault();
-    const p = { x: e.clientX, y: e.clientY };
-    const last = points[points.length - 1];
-    if (last && Math.hypot(p.x - last.x, p.y - last.y) < 1.5) return;
-    points.push(p);
-    redrawStroke();
-  }
-
-  function onPointerUp(e) {
-    if (!drawing) return;
-    e.preventDefault();
-    drawing = false;
-    try {
-      canvas.releasePointerCapture(e.pointerId);
-    } catch (_) {
-      /* ignore */
-    }
-
-    const pathLen = pathLength(points);
-    if (points.length < MIN_POINTS || pathLen < MIN_PATH_LEN) {
-      clearCanvas();
-      showToast("Circule com um traço maior, bem rente ao alvo");
-      return;
-    }
-
-    // Hide canvas so hit-testing sees the real page
-    canvas.style.visibility = "hidden";
-    const hit = resolveTarget(points);
-    canvas.style.visibility = "visible";
-    clearCanvas();
-
-    if (!hit) {
-      showToast("Não achei bem o que você circulou, tente um traço mais rente");
-      return;
-    }
-
-    const payload = buildPayload(hit);
-    if (!payload.targetText || payload.targetText.length < 2 || /^[,.\-–—/%\sR$]+$/i.test(payload.targetText)) {
-      showToast("Seleção incompleta: circule o texto/preço inteiro");
-      return;
-    }
-
-    pendingLocal = { ...payload, element: hit.el, textHits: hit.textHits || [] };
-    const box =
-      hit.highlightRect ||
-      computeHighlightRect(hit.el, hit.textHits, payload.targetText) ||
-      hit.el.getBoundingClientRect();
-    placeHighlight(box);
-    showConfirmBar(payload);
-    showToast(`Peguei: ${payload.targetText.slice(0, 48)}`);
-
-    chrome.runtime.sendMessage({ type: "VIGIL_SELECTION", payload }, () => {
-      setPenActive(false);
-      // some sumir o vermelho sozinho depois da animação
-      scheduleHighlightClear(2200);
+  const clean = (s) => String(s || "").replace(/[\u200b-\u200d\ufeff]/g, "").replace(/\s+/g, " ").trim();
+  const squash = (s) => clean(s).toLowerCase().replace(/\s+/g, "");
+  const textOf = (el) => clean(el.innerText ?? el.textContent ?? "");
+  const area = (r) => Math.max(0, r.width) * Math.max(0, r.height);
+  const send = (msg) =>
+    new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(msg, (res) => {
+          if (chrome.runtime.lastError) resolve({ ok: false, offline: true, error: "Extensão recarregada. Recarregue a página." });
+          else resolve(res || { ok: false, error: "Sem resposta" });
+        });
+      } catch {
+        resolve({ ok: false, error: "Extensão recarregada. Recarregue a página." });
+      }
     });
-  }
-
-  function scheduleHighlightClear(ms) {
-    clearTimeout(highlightTimer);
-    highlightTimer = setTimeout(() => {
-      if (highlightEl) highlightEl.classList.add("vigil-fade-out");
-      setTimeout(() => {
-        clearHighlight();
-        hideConfirmBar();
-        pendingLocal = null;
-      }, 320);
-    }, ms);
-  }
-
-  function clearCanvas() {
-    if (!ctx || !canvas) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }
-
-  function redrawStroke() {
-    if (!ctx || !canvas || points.length < 2) return;
-    clearCanvas();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = PEN_COLOR;
-    ctx.lineWidth = 3.2;
-    ctx.shadowColor = "rgba(225, 29, 46, 0.45)";
-    ctx.shadowBlur = 6;
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-  }
-
-  function pathLength(pts) {
-    let len = 0;
-    for (let i = 1; i < pts.length; i++) {
-      len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  const h = (tag, attrs = {}, ...children) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+      else if (k === "class") el.className = v;
+      else if (k === "html") el.innerHTML = v;
+      else el.setAttribute(k, v === true ? "" : v);
     }
-    return len;
-  }
+    for (const c of children.flat()) if (c != null && c !== false) el.append(c);
+    return el;
+  };
 
-  function pathBounds(pts) {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
+  // Geometry
+
+  function bounds(pts) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const p of pts) {
-      minX = Math.min(minX, p.x);
-      minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x);
-      maxY = Math.max(maxY, p.y);
+      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
     }
-    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+    return { left: minX, top: minY, right: maxX, bottom: maxY, width: maxX - minX, height: maxY - minY };
   }
 
-  function pointInPolygon(x, y, poly) {
+  function inPoly(x, y, poly) {
     let inside = false;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const xi = poly[i].x;
-      const yi = poly[i].y;
-      const xj = poly[j].x;
-      const yj = poly[j].y;
-      const intersect =
-        yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi + 1e-9) + xi;
-      if (intersect) inside = !inside;
+      const a = poly[i], b = poly[j];
+      if (a.y > y !== b.y > y && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y + 1e-9) + a.x) inside = !inside;
     }
     return inside;
   }
 
-  function isOverlay(el) {
-    return Boolean(
-      el?.classList?.contains("vigil-pen-canvas") ||
-        el?.classList?.contains("vigil-highlight") ||
-        el?.closest?.(".vigil-pen-canvas, .vigil-highlight, .vigil-confirm, .vigil-toast")
-    );
-  }
+  const intersects = (r, b) => r.right > b.left && r.left < b.right && r.bottom > b.top && r.top < b.bottom;
 
-  function rectArea(r) {
-    return Math.max(0, r.width) * Math.max(0, r.height);
-  }
-
-  function ownText(el) {
-    let t = "";
-    for (const node of el.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) t += node.textContent || "";
-    }
-    return cleanText(t);
-  }
-
-  function visibleText(el) {
-    return cleanText(el.innerText || el.textContent || "");
-  }
-
-  function cleanText(t) {
-    return String(t || "")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  function isPriceLike(text) {
-    if (!text) return false;
-    const t = cleanText(text);
-    if (t.length > 48) return false;
-    if (isFragmentText(t)) return false;
-    if (/r\$\s*\d{1,3}(?:\.\d{3})*(?:,\d{2})?/i.test(t)) return true;
-    if (/\d{1,3}(?:\.\d{3})+,\d{2}/.test(t)) return true;
-    if (/^\d{1,6}[.,]\d{2}$/.test(t)) return true;
-    if (/^\d{1,3}(?:\.\d{3})+$/.test(t)) return true; // 1.234
-    return false;
-  }
-
-  function isCompletePrice(text) {
-    const t = cleanText(text);
-    if (!t || t.length < 4 || t.length > 40) return false;
-    if (isFragmentText(t)) return false;
-    // R$ 365,90 | 365,90 | 1.234,56
-    return (
-      /r\$\s*\d{1,3}(?:\.\d{3})*(?:,\d{2})?/i.test(t) ||
-      /^\d{1,3}(?:\.\d{3})*,\d{2}$/.test(t) ||
-      /^\d+[.,]\d{2}$/.test(t)
-    );
-  }
-
-  function isFragmentText(text) {
-    const t = cleanText(text);
-    if (!t) return true;
-    if (t.length === 1) return true;
-    if (/^[,.\-–—/%\s]+$/.test(t)) return true;
-    if (/^(r\$|us\$|€|£)$/i.test(t)) return true;
-    if (/^(off|%|x)$/i.test(t)) return true;
-    // lone cents separator leftovers
-    if (/^,\d{2}$/.test(t) && t.length <= 3) return true;
-    return false;
-  }
-
-  function isMoneyShell(el) {
-    if (!(el instanceof Element)) return false;
-    const cls = typeof el.className === "string" ? el.className : el.getAttribute?.("class") || "";
-    if (/money-amount|andes-money|price-tag|ui-pdp-price|product-price|a-price/i.test(cls)) {
-      return true;
-    }
-    if (el.getAttribute?.("itemprop") === "price") return true;
-    return false;
-  }
-
-  function fontSizePx(el) {
-    try {
-      return parseFloat(getComputedStyle(el).fontSize) || 0;
-    } catch {
-      return 0;
-    }
-  }
-
-  function isStruck(el) {
-    try {
-      const s = getComputedStyle(el);
-      if ((s.textDecorationLine || "").includes("line-through")) return true;
-      if (el.closest("s, del, strike")) return true;
-      const cls = typeof el.className === "string" ? el.className : "";
-      if (/strik|original|was-price|old-price|ui-pdp-price__original/i.test(cls)) return true;
-      return false;
-    } catch {
-      return false;
-    }
-  }
-
-  function maxAllowedArea(stroke) {
-    const viewport = window.innerWidth * window.innerHeight;
-    const strokeArea = Math.max(400, stroke.w * stroke.h);
-    // prices are small; allow a bit more for money-amount wrappers
-    return Math.min(viewport * 0.06, strokeArea * 4.5, 90_000);
-  }
-
-  /** Climb from comma/"365"/"R$" up to the full money unit. */
-  function expandToMeaningful(el, maxArea) {
-    if (!(el instanceof Element)) return el;
-    if (kindOf(el) === "image") return el;
-
-    let cur = el;
-
-    // Always leave pure fragments
-    for (let i = 0; i < 8 && cur?.parentElement; i++) {
-      const t = visibleText(cur);
-      if (!isFragmentText(t) && (isCompletePrice(t) || !isPricePiece(cur))) break;
-      if (isFragmentText(t) || isPricePiece(cur)) {
-        cur = cur.parentElement;
-        continue;
-      }
-      break;
-    }
-
-    // Prefer known money containers
-    const shell =
-      cur.closest?.(
-        '[class*="money-amount"], [class*="andes-money"], [class*="price-tag"], [class*="ui-pdp-price"], [itemprop="price"]'
-      ) || null;
-    if (shell instanceof Element) {
-      const a = rectArea(shell.getBoundingClientRect());
-      const t = visibleText(shell);
-      if (a <= maxArea && t.length <= 48 && (isCompletePrice(t) || isPriceLike(t))) {
-        // If shell is a big block with many prices, pick best money child
-        const bestChild = bestMoneyChild(shell, maxArea);
-        return bestChild || shell;
+  /** Share of a rect inside the stroke, sampled on a 4x3 grid. */
+  function coverage(r, poly) {
+    let hit = 0, total = 0;
+    for (let i = 0; i < 4; i++) {
+      for (let j = 0; j < 3; j++) {
+        total++;
+        if (inPoly(r.left + (r.width * (i + 0.5)) / 4, r.top + (r.height * (j + 0.5)) / 3, poly)) hit++;
       }
     }
-
-    // Keep climbing while parent still looks like one price
-    for (let i = 0; i < 6 && cur?.parentElement; i++) {
-      const parent = cur.parentElement;
-      if (parent === document.body || parent === document.documentElement) break;
-      const pa = rectArea(parent.getBoundingClientRect());
-      if (pa > maxArea) break;
-      const pt = visibleText(parent);
-      const ct = visibleText(cur);
-      if (pt.length > 48) break;
-      if (isCompletePrice(pt)) {
-        cur = parent;
-        break;
-      }
-      if (isPriceLike(pt) && pt.length <= ct.length + 12) {
-        cur = parent;
-        continue;
-      }
-      if (isFragmentText(ct) && !isFragmentText(pt)) {
-        cur = parent;
-        continue;
-      }
-      break;
-    }
-
-    // If still a fragment, refuse (caller may skip)
-    return cur;
+    return hit / total;
   }
 
-  function isPricePiece(el) {
-    const cls = typeof el.className === "string" ? el.className : "";
-    if (/money-amount__(fraction|cents|currency|separator)|andes-money|price-tag|a-price/i.test(cls)) {
-      return true;
-    }
-    const t = visibleText(el);
-    if (isFragmentText(t)) return true;
-    if (/^\d{1,6}$/.test(t)) return true; // "365" alone
-    return false;
-  }
-
-  function bestMoneyChild(root, maxArea) {
-    const nodes = [
-      root,
-      ...root.querySelectorAll(
-        '[class*="money-amount"], [class*="andes-money"], [class*="price-tag"], [itemprop="price"]'
-      ),
+  /**
+   * A loop is used as drawn. An open stroke (an underline, a slash, a loop
+   * that did not close) becomes its bounding box, slightly padded.
+   */
+  function shapeOf(pts) {
+    const b = bounds(pts);
+    const gap = Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y);
+    const closed = gap < Math.max(48, Math.hypot(b.width, b.height) * 0.45) && b.width > 14 && b.height > 10;
+    if (closed) return { poly: pts, box: b };
+    const pad = 8;
+    const box = { left: b.left - pad, top: b.top - pad, right: b.right + pad, bottom: b.bottom + pad };
+    box.width = box.right - box.left;
+    box.height = box.bottom - box.top;
+    const poly = [
+      { x: box.left, y: box.top }, { x: box.right, y: box.top },
+      { x: box.right, y: box.bottom }, { x: box.left, y: box.bottom },
     ];
-    let best = null;
-    let bestScore = -Infinity;
-    for (const el of nodes) {
-      if (!(el instanceof Element)) continue;
-      const t = visibleText(el);
-      if (!isCompletePrice(t) && !isPriceLike(t)) continue;
-      if (t.length > 40) continue;
-      const r = el.getBoundingClientRect();
-      const a = rectArea(r);
-      if (a < 8 || a > maxArea) continue;
-      let score = fontSizePx(el) * 20;
-      if (isCompletePrice(t)) score += 500;
-      if (isStruck(el)) score -= 800;
-      if (/install|parcel|cuota|12x|sem juros/i.test(t)) score -= 400;
-      // prefer compact single-price nodes
-      score += 8000 / Math.sqrt(a + 16);
-      if (score > bestScore) {
-        bestScore = score;
-        best = el;
-      }
-    }
-    return best;
+    return { poly, box };
   }
 
-  function shrinkToPoint(startEl, x, y, maxArea) {
-    // Find deepest element under point, then expand to meaningful price unit
-    let deepest = startEl;
-    const walk = (el, depth) => {
-      if (depth > 14) return;
-      for (const child of el.children) {
-        if (!(child instanceof Element) || isOverlay(child)) continue;
-        const r = child.getBoundingClientRect();
-        if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
-        deepest = child;
-        walk(child, depth + 1);
-      }
-    };
-    walk(startEl, 0);
-    return expandToMeaningful(deepest, maxArea);
+  // Target detection
+
+  function isOurs(node) {
+    return host && (node === host || host.contains(node));
   }
 
-  function elementAt(x, y, maxArea) {
-    const stack = document.elementsFromPoint(x, y);
-    for (const el of stack) {
-      if (!(el instanceof Element) || isOverlay(el)) continue;
-      if (el === document.documentElement || el === document.body) continue;
-      return shrinkToPoint(el, x, y, maxArea);
-    }
-    return null;
+  function isHidden(el) {
+    const s = getComputedStyle(el);
+    return s.visibility === "hidden" || s.display === "none" || Number(s.opacity) === 0;
   }
 
-  function refineInsideCircle(el, pts, maxArea) {
-    // From seed, look for the best complete price inside the circle (not tiniest fragment)
-    const root = expandToMeaningful(el, maxArea) || el;
-    let searchRoot = root;
-    // widen slightly to price block parent if needed
-    if (root.parentElement && isMoneyShell(root.parentElement)) {
-      const a = rectArea(root.parentElement.getBoundingClientRect());
-      if (a <= maxArea * 1.2) searchRoot = root.parentElement;
-    }
-
-    const candidates = new Set();
-    candidates.add(expandToMeaningful(root, maxArea));
-    for (const node of searchRoot.querySelectorAll("*")) {
-      if (!(node instanceof Element)) continue;
-      const r = node.getBoundingClientRect();
-      if (rectArea(r) > maxArea) continue;
-      const cx = r.left + r.width / 2;
-      const cy = r.top + r.height / 2;
-      if (!pointInPolygon(cx, cy, pts) && rectOverlapStroke(r, pts) < 0.35) continue;
-      const text = visibleText(node);
-      if (isCompletePrice(text) || isMoneyShell(node)) {
-        candidates.add(expandToMeaningful(node, maxArea));
-      }
-    }
-
-    let best = null;
-    let bestScore = -Infinity;
-    for (const c of candidates) {
-      if (!c) continue;
-      const s = scoreCandidate(c, pts, maxArea);
-      if (s > bestScore) {
-        bestScore = s;
-        best = c;
-      }
-    }
-    if (!best) best = root;
-    return {
-      el: best,
-      rect: best.getBoundingClientRect(),
-      kind: kindOf(best),
-      score: bestScore,
-    };
-  }
-
-  function rectOverlapStroke(r, pts) {
-    const b = pathBounds(pts);
-    const x1 = Math.max(r.left, b.minX);
-    const y1 = Math.max(r.top, b.minY);
-    const x2 = Math.min(r.right, b.maxX);
-    const y2 = Math.min(r.bottom, b.maxY);
-    const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-    const a = rectArea(r);
-    return a ? inter / a : 0;
-  }
-
-  function scoreCandidate(el, pts, maxArea) {
-    if (!(el instanceof Element) || isOverlay(el)) return -Infinity;
-    const r = el.getBoundingClientRect();
-    const a = rectArea(r);
-    if (a < 8 || a > maxArea) return -Infinity;
-
-    const text = visibleText(el);
-    if (isFragmentText(text)) return -Infinity;
-    if (text.length === 1) return -Infinity;
-
-    const cx = r.left + r.width / 2;
-    const cy = r.top + r.height / 2;
-    const centerIn = pointInPolygon(cx, cy, pts);
-    const overlap = rectOverlapStroke(r, pts);
-    if (!centerIn && overlap < 0.2) return -Infinity;
-
-    const kind = kindOf(el);
-    const fs = fontSizePx(el);
-
-    let score = 0;
-    score += (centerIn ? 500 : 0) + overlap * 400;
-    // Prefer readable price blocks, not microscopic fragments
-    if (isCompletePrice(text)) score += 4000 + fs * 35;
-    else if (isPriceLike(text)) score += 1200 + fs * 15;
-    else if (kind === "image") score += 900;
-    else if (text.length >= 2 && text.length <= 40) score += 200 + fs * 5;
-    else score -= 300;
-
-    if (isStruck(el)) score -= 1200;
-    if (/^\d+x\b|parcel|sem juros|install/i.test(text)) score -= 600;
-    if (text.length > 80) score -= 1000;
-    if (text.length > 160) score -= 2000;
-
-    // Mild preference for compact nodes, but NOT extreme (avoids ",")
-    score += 3000 / Math.sqrt(a + 64);
-    return score;
-  }
-
-  function kindOf(el) {
-    if (el.tagName === "IMG" || el.closest?.("picture")) return "image";
-    if (el.tagName === "VIDEO" || el.tagName === "SVG") return "media";
-    return "text";
-  }
-
-  function rectCoverageInPolygon(r, pts) {
-    const w = r.width;
-    const h = r.height;
-    if (w < 1 || h < 1) return 0;
-    let inside = 0;
-    let total = 0;
-    const nx = Math.min(6, Math.max(2, Math.ceil(w / 12)));
-    const ny = Math.min(6, Math.max(2, Math.ceil(h / 12)));
-    for (let iy = 0; iy <= ny; iy++) {
-      for (let ix = 0; ix <= nx; ix++) {
-        const x = r.left + (w * ix) / nx;
-        const y = r.top + (h * iy) / ny;
-        total += 1;
-        if (pointInPolygon(x, y, pts)) inside += 1;
-      }
-    }
-    return total ? inside / total : 0;
-  }
-
-  function inflateBounds(b, pad) {
-    return {
-      minX: b.minX - pad,
-      minY: b.minY - pad,
-      maxX: b.maxX + pad,
-      maxY: b.maxY + pad,
-      w: b.w + pad * 2,
-      h: b.h + pad * 2,
-    };
-  }
-
-  function rectsIntersectBounds(r, b) {
-    return !(r.right < b.minX || r.left > b.maxX || r.bottom < b.minY || r.top > b.maxY);
-  }
-
-  function lcaElements(elements) {
-    if (!elements.length) return null;
-    let path = [];
-    for (let n = elements[0]; n; n = n.parentElement) path.push(n);
-    for (let i = 1; i < elements.length; i++) {
-      const set = new Set();
-      for (let n = elements[i]; n; n = n.parentElement) set.add(n);
-      path = path.filter((n) => set.has(n));
-      if (!path.length) return null;
-    }
-    return path[0] || null;
-  }
-
-  /** Collect exact text/images that sit inside the drawn circle. */
-  function harvestInside(pts, maxArea) {
-    const b = inflateBounds(pathBounds(pts), 10);
-    const textHits = [];
-    const imageHits = [];
-
-    // Images first
-    for (const img of document.querySelectorAll("img")) {
-      if (!(img instanceof Element) || isOverlay(img)) continue;
-      const r = img.getBoundingClientRect();
-      const a = rectArea(r);
-      if (a < 80 || a > maxArea * 2) continue;
-      if (!rectsIntersectBounds(r, b)) continue;
-      const cov = rectCoverageInPolygon(r, pts);
-      if (cov < 0.35) continue;
-      imageHits.push({ el: img, rect: r, coverage: cov, area: a });
-    }
-
-    // Text nodes via Range client rects (precise)
-    const startEl = document.elementFromPoint((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2);
-    let root = startEl?.closest?.("main, article, [role='main'], #root, #app, body") || document.body;
-    if (!(root instanceof Element)) root = document.body;
-
-    // Limit walk to nodes near bounds for performance
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+  /** Text pieces (whole nodes or runs of words) whose boxes fall inside the stroke, in document order. */
+  function textHits(shape) {
+    const { poly, box } = shape;
+    const hits = [];
+    const parentHit = new Map();
+    const range = document.createRange();
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
-        const t = node.textContent || "";
-        if (!t.trim()) return NodeFilter.FILTER_REJECT;
+        if (!node.data.trim()) return NodeFilter.FILTER_REJECT;
         const parent = node.parentElement;
-        if (!parent || isOverlay(parent)) return NodeFilter.FILTER_REJECT;
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA"].includes(parent.tagName)) {
-          return NodeFilter.FILTER_REJECT;
+        if (!parent || isOurs(parent)) return NodeFilter.FILTER_REJECT;
+        if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|TEXTAREA|OPTION)$/.test(parent.tagName)) return NodeFilter.FILTER_REJECT;
+        let near = parentHit.get(parent);
+        if (near === undefined) {
+          const r = parent.getBoundingClientRect();
+          // Parents can be smaller than their text (overflow), so compare loosely.
+          near = r.width === 0 && r.height === 0 ? true : intersects(r, { left: box.left - 400, right: box.right + 400, top: box.top - 200, bottom: box.bottom + 200 });
+          parentHit.set(parent, near);
         }
-        return NodeFilter.FILTER_ACCEPT;
+        return near ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       },
     });
 
-    let guard = 0;
-    while (walker.nextNode() && guard++ < 8000) {
-      const node = walker.currentNode;
-      let range;
-      try {
-        range = document.createRange();
-        range.selectNodeContents(node);
-      } catch {
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+      if (!rects.some((r) => intersects(r, box))) continue;
+      if (isHidden(node.parentElement)) continue;
+      if (rects.every((r) => coverage(r, poly) >= 0.5)) {
+        hits.push({ node, start: 0, end: node.data.length });
         continue;
       }
-      const rects = [...range.getClientRects()];
-      if (!rects.length) continue;
-
-      let bestCov = 0;
-      let bestRect = null;
-      let coveredArea = 0;
-      let totalArea = 0;
-      for (const r of rects) {
-        const a = rectArea(r);
-        if (a < 1) continue;
-        if (!rectsIntersectBounds(r, b)) continue;
-        totalArea += a;
-        const cov = rectCoverageInPolygon(r, pts);
-        if (cov > 0.4) {
-          coveredArea += a * cov;
-          if (cov > bestCov) {
-            bestCov = cov;
-            bestRect = r;
-          }
+      // Partly inside: keep the run of words whose centers are inside. A loop
+      // drawn by hand cuts corners, so a node that is mostly inside counts whole.
+      const re = /\S+/g;
+      let m, start = -1, end = -1, inside = 0, total = 0;
+      while ((m = re.exec(node.data))) {
+        total++;
+        range.setStart(node, m.index);
+        range.setEnd(node, m.index + m[0].length);
+        const r = range.getBoundingClientRect();
+        if (r.width && inPoly(r.left + r.width / 2, r.top + r.height / 2, poly)) {
+          inside++;
+          if (start < 0) start = m.index;
+          end = m.index + m[0].length;
         }
       }
-      if (!bestRect || bestCov < 0.4) continue;
-
-      const raw = String(node.textContent || "");
-      // If only part of a long text node is circled, still take the node text,
-      // parent expansion will decide the unit. Prefer parent element's full line later.
-      textHits.push({
-        node,
-        parent: node.parentElement,
-        text: raw,
-        rect: bestRect,
-        coverage: bestCov,
-        coveredRatio: totalArea ? coveredArea / totalArea : bestCov,
-      });
+      if (start < 0) continue;
+      if (inside / total >= 0.6) hits.push({ node, start: 0, end: node.data.length });
+      else hits.push({ node, start, end });
     }
-
-    // Also include nearby siblings on same line that almost touch the circle
-    // (fixes R$ + 365 + , + 90 split across spans)
-    const expanded = expandHarvestWithLineSiblings(textHits, pts, b);
-    return { textHits: expanded, imageHits };
+    range.detach?.();
+    return hits;
   }
 
-  function expandHarvestWithLineSiblings(textHits, pts, b) {
-    if (!textHits.length) return textHits;
-    const out = [...textHits];
-    const seen = new Set(textHits.map((h) => h.node));
-    const parents = new Set(textHits.map((h) => h.parent).filter(Boolean));
-
-    for (const parent of parents) {
-      const lineY = textHits
-        .filter((h) => h.parent === parent || parent.contains?.(h.parent))
-        .map((h) => h.rect.top + h.rect.height / 2);
-      if (!lineY.length) continue;
-      const avgY = lineY.reduce((a, c) => a + c, 0) / lineY.length;
-
-      for (const child of parent.querySelectorAll("*")) {
-        if (!(child instanceof Element)) continue;
-        for (const node of child.childNodes) {
-          if (node.nodeType !== Node.TEXT_NODE || seen.has(node)) continue;
-          const t = String(node.textContent || "");
-          if (!t.trim()) continue;
-          let range;
-          try {
-            range = document.createRange();
-            range.selectNodeContents(node);
-          } catch {
-            continue;
-          }
-          const rects = [...range.getClientRects()];
-          for (const r of rects) {
-            if (!rectsIntersectBounds(r, inflateBounds(b, 18))) continue;
-            const cy = r.top + r.height / 2;
-            if (Math.abs(cy - avgY) > Math.max(14, r.height * 1.2)) continue;
-            // near the circle horizontally
-            const near =
-              rectCoverageInPolygon(r, pts) > 0.15 ||
-              (r.left < b.maxX + 20 && r.right > b.minX - 20);
-            if (!near) continue;
-            seen.add(node);
-            out.push({
-              node,
-              parent: node.parentElement,
-              text: t,
-              rect: r,
-              coverage: Math.max(0.5, rectCoverageInPolygon(r, pts)),
-              coveredRatio: 1,
-              glued: true,
-            });
-          }
-        }
-      }
+  function mediaHits(shape) {
+    const out = [];
+    for (const el of document.querySelectorAll("img, svg, video, canvas, picture")) {
+      if (isOurs(el) || el.parentElement?.closest("svg")) continue;
+      const r = el.getBoundingClientRect();
+      if (area(r) < 120 || !intersects(r, shape.box)) continue;
+      if (coverage(r, shape.poly) >= 0.5) out.push(el);
     }
     return out;
   }
 
-  function circledTextFromHits(textHits) {
-    // Preserve visual order
-    const sorted = [...textHits].sort((a, b) => {
-      const dy = a.rect.top - b.rect.top;
-      if (Math.abs(dy) > 6) return dy;
-      return a.rect.left - b.rect.left;
-    });
-    let text = "";
-    for (const h of sorted) {
-      const piece = h.text.replace(/\s+/g, " ");
-      if (!piece.trim()) continue;
-      // avoid duplicating if already included
-      if (text && text.includes(cleanText(piece)) && cleanText(piece).length > 8) continue;
-      const needsSpace =
-        text &&
-        !/[\s([{/]$/.test(text) &&
-        !/^[\s),.\];:!?%°]/.test(piece);
-      text += (needsSpace ? " " : "") + piece.trim();
+  function commonAncestor(nodes) {
+    if (!nodes.length) return null;
+    const chain = [];
+    for (let n = nodes[0]; n; n = n.parentNode) chain.push(n);
+    let best = 0;
+    for (const node of nodes.slice(1)) {
+      let n = node;
+      while (n && !chain.includes(n)) n = n.parentNode;
+      best = Math.max(best, chain.indexOf(n));
     }
-    return cleanText(text);
+    let lca = chain[best];
+    if (lca && lca.nodeType !== 1) lca = lca.parentElement;
+    return lca;
   }
 
-  function pickContainerForHits(textHits, pts, maxArea) {
-    const parents = textHits.map((h) => h.parent).filter((el) => el instanceof Element);
-    if (!parents.length) return null;
+  /**
+   * Wrappers that add (almost) nothing to the text are the same target; a
+   * fragment like "365" inside "R$ 365,90" is not. Climb while the parent's
+   * text is essentially ours and it is not much bigger on screen.
+   */
+  function settle(el, shape) {
+    const strokeArea = Math.max(area(shape.box), 400);
+    while (el.parentElement && el.parentElement !== document.body && el.parentElement !== document.documentElement) {
+      const parent = el.parentElement;
+      const ct = squash(textOf(el)).length;
+      const pt = squash(textOf(parent)).length;
+      const nearlySame = pt <= ct * 1.15 + 2;
+      const smallFragment = ct < 24 && pt <= ct + 12;
+      const pr = parent.getBoundingClientRect();
+      const fits = area(pr) <= Math.max(area(el.getBoundingClientRect()) * 3, strokeArea * 3);
+      if ((nearlySame || smallFragment) && fits) el = parent;
+      else break;
+    }
+    return el;
+  }
 
-    let lca = lcaElements(parents);
-    if (!lca) lca = parents[0];
+  function capturedFrom(hits) {
+    return clean(hits.map((x) => x.node.data.slice(x.start, x.end)).join(" "));
+  }
 
-    // Climb while parent still mostly matches circled content / stays compact
-    const circled = circledTextFromHits(textHits);
-    let best = expandToMeaningful(lca, maxArea) || lca;
+  function mediaText(el) {
+    const img = el.matches("img") ? el : el.querySelector("img");
+    return clean(img?.alt || el.getAttribute("aria-label") || el.getAttribute("title") || "");
+  }
 
-    // Prefer ancestor that fully contains circled text and is still small
-    let cur = best;
-    for (let i = 0; i < 8 && cur; i++) {
-      const t = visibleText(cur);
-      const r = cur.getBoundingClientRect();
-      const a = rectArea(r);
-      if (a > maxArea) break;
-      if (t.length > 280) break;
-      const cov = rectCoverageInPolygon(r, pts);
-      // good container: contains circled text, not huge extra, decent coverage
-      if (circled && t.includes(circled.slice(0, Math.min(24, circled.length)))) {
-        const extra = Math.max(0, t.length - circled.length);
-        if (extra <= Math.max(24, circled.length * 0.5) || isCompletePrice(t) || isMoneyShell(cur)) {
-          best = cur;
-        }
+  function resolve(pts) {
+    const shape = shapeOf(pts);
+    const hits = textHits(shape);
+    const media = hits.length ? [] : mediaHits(shape);
+    let el = commonAncestor([...hits.map((x) => x.node), ...media]);
+    let captured = hits.length ? capturedFrom(hits) : media.length ? mediaText(el || media[0]) : "";
+
+    if (!el) {
+      const cx = shape.box.left + shape.box.width / 2;
+      const cy = shape.box.top + shape.box.height / 2;
+      const under = document.elementsFromPoint(cx, cy).find((x) => !isOurs(x));
+      if (!under || under === document.body || under === document.documentElement) return null;
+      el = under;
+      captured = textOf(el).slice(0, 300) || mediaText(el);
+    }
+    if (el === document.body || el === document.documentElement) return null;
+    el = settle(el, shape);
+    // Circled most of the element: take its whole text, in the order the page shows it.
+    const full = textOf(el);
+    if (full && squash(captured).length >= squash(full).length * 0.5) captured = full.slice(0, 600);
+    if (!captured) captured = full.slice(0, 300) || mediaText(el);
+    if (!captured || squash(captured).length < 2) return null;
+    return { el, captured, original: el, history: [] };
+  }
+
+  // Selectors
+
+  const STATE_CLASS = /^(active|selected|current|open|opened|closed|show|shown|hidden|visible|hover|focus|focused|disabled|loading|loaded|expanded|collapsed|is-.*|has-.*)$/i;
+
+  function stableToken(s) {
+    if (!s || s.length > 40) return false;
+    if (/^\d/.test(s) || s.startsWith(":")) return false;
+    if (/\d{4,}/.test(s)) return false;
+    if (/^(css|sc|jsx|svelte|emotion|chakra|mui|tw|styled)-/i.test(s)) return false;
+    if (/[_-][a-z0-9]{5,}$/i.test(s) && /\d/.test(s.slice(-6)) ) return false; // CSS modules hash: button_x3k2a
+    if (!/-|_/.test(s) && /[a-z]/.test(s) && /[A-Z]/.test(s) && /\d/.test(s)) return false; // aB3dE
+    return /^[a-zA-Z_][\w-]*$/.test(s);
+  }
+
+  const esc = (s) => CSS.escape(s);
+  const attrValue = (v) => `"${v.replace(/["\\]/g, "\\$&")}"`;
+
+  function uniqueFor(sel, el, scope = document) {
+    try {
+      const found = scope.querySelectorAll(sel);
+      return found.length === 1 && found[0] === el;
+    } catch {
+      return false;
+    }
+  }
+
+  function goodClasses(el) {
+    return [...el.classList].filter((c) => stableToken(c) && !STATE_CLASS.test(c)).slice(0, 3);
+  }
+
+  /** The strongest way to name this one element on its own, or null. */
+  function anchorOf(el) {
+    const tag = el.tagName.toLowerCase();
+    if (el.id && stableToken(el.id)) {
+      const sel = `#${esc(el.id)}`;
+      if (uniqueFor(sel, el)) return sel;
+    }
+    for (const attr of ["data-testid", "data-test", "data-qa", "data-cy", "itemprop", "data-id", "name", "aria-label"]) {
+      const v = el.getAttribute(attr);
+      if (!v || v.length > 60 || /\d{5,}/.test(v)) continue;
+      const sel = `${tag}[${attr}=${attrValue(v)}]`;
+      if (uniqueFor(sel, el)) return sel;
+    }
+    const classes = goodClasses(el);
+    if (classes.length) {
+      const sel = `${tag}${classes.map((c) => `.${esc(c)}`).join("")}`;
+      if (uniqueFor(sel, el)) return sel;
+    }
+    return null;
+  }
+
+  function stepOf(el) {
+    const tag = el.tagName.toLowerCase();
+    const parent = el.parentElement;
+    const classes = goodClasses(el).slice(0, 2);
+    const base = `${tag}${classes.map((c) => `.${esc(c)}`).join("")}`;
+    if (!parent) return base;
+    const same = [...parent.children].filter((c) => c.tagName === el.tagName);
+    if (same.length === 1) return tag;
+    const sameBase = [...parent.children].filter((c) => {
+      try {
+        return c.matches(base);
+      } catch {
+        return false;
       }
-      // stop if coverage of parent drops a lot (too big vs circle)
-      if (cov < 0.12 && a > pathBounds(pts).w * pathBounds(pts).h * 2) break;
+    });
+    if (classes.length && sameBase.length === 1) return base;
+    return `${tag}:nth-of-type(${same.indexOf(el) + 1})`;
+  }
+
+  /** Path of child steps from the closest ancestor that has an anchor (or body). */
+  function anchoredPath(el, maxDepth = 12) {
+    const steps = [];
+    let cur = el;
+    for (let depth = 0; cur && depth < maxDepth; depth++) {
+      if (cur === document.body) return ["body", ...steps].join(" > ");
+      const anchor = depth > 0 ? anchorOf(cur) : null;
+      if (anchor) return [anchor, ...steps].join(" > ");
+      steps.unshift(stepOf(cur));
       cur = cur.parentElement;
     }
-
-    // If money shell nearby, snap to best money child
-    const money = bestMoneyChild(best, maxArea);
-    if (money) {
-      const mt = visibleText(money);
-      if (isCompletePrice(mt) || isPriceLike(mt)) {
-        const mCov = rectCoverageInPolygon(money.getBoundingClientRect(), pts);
-        if (mCov > 0.25) return money;
-      }
-    }
-
-    // Among candidates (lca, best, money shells under lca), pick by IoU-ish score
-    const candidates = new Set([best, lca, expandToMeaningful(lca, maxArea)]);
-    for (const p of parents.slice(0, 20)) {
-      candidates.add(expandToMeaningful(p, maxArea));
-    }
-
-    let winner = best;
-    let winnerScore = -Infinity;
-    for (const el of candidates) {
-      if (!(el instanceof Element)) continue;
-      const s = scoreHarvestContainer(el, circled, pts, maxArea);
-      if (s > winnerScore) {
-        winnerScore = s;
-        winner = el;
-      }
-    }
-    return winner;
+    return null;
   }
 
-  function scoreHarvestContainer(el, circled, pts, maxArea) {
-    const r = el.getBoundingClientRect();
-    const a = rectArea(r);
-    if (a < 8 || a > maxArea) return -Infinity;
-    const t = visibleText(el);
-    if (isFragmentText(t)) return -Infinity;
-    const cov = rectCoverageInPolygon(r, pts);
-    if (cov < 0.1) return -Infinity;
-
-    let score = cov * 2000;
-    score += 2500 / Math.sqrt(a + 64);
-
-    if (circled) {
-      if (t === circled) score += 3000;
-      else if (t.includes(circled)) {
-        score += 1800;
-        const extra = t.length - circled.length;
-        score -= Math.min(1500, extra * 8);
-      } else if (circled.includes(t) && t.length >= 4) {
-        score += 600; // container text is subset, partial
-        score -= (circled.length - t.length) * 10;
-      } else {
-        // similarity: shared prefix/ratio
-        const shared = longestOverlap(circled, t);
-        score += shared * 15;
-        score -= 400;
-      }
-    }
-
-    if (isCompletePrice(t)) score += 2200 + fontSizePx(el) * 25;
-    else if (isPriceLike(t)) score += 800;
-    if (isStruck(el)) score -= 1000;
-    if (t.length > 200) score -= 800;
-    return score;
-  }
-
-  function longestOverlap(a, b) {
-    const x = cleanText(a).toLowerCase();
-    const y = cleanText(b).toLowerCase();
-    if (!x || !y) return 0;
-    if (x.includes(y)) return y.length;
-    if (y.includes(x)) return x.length;
-    let best = 0;
-    for (let len = Math.min(x.length, y.length); len >= 3; len--) {
-      for (let i = 0; i <= x.length - len; i++) {
-        if (y.includes(x.slice(i, i + len))) return len;
-      }
-    }
-    return best;
-  }
-
-  function resolveTarget(pts) {
-    const b = pathBounds(pts);
-    if (b.w < 6 || b.h < 6) return null;
-    const maxArea = maxAllowedArea(b);
-
-    const { textHits, imageHits } = harvestInside(pts, maxArea);
-    const circled = circledTextFromHits(textHits);
-
-    // Prefer image if circle is mostly on an image and little text
-    const bestImg = [...imageHits].sort((a, b) => b.coverage * b.area - a.coverage * a.area)[0];
-    const textLen = cleanText(circled).length;
-    if (bestImg && bestImg.coverage > 0.45 && textLen < 8) {
-      return {
-        el: bestImg.el,
-        rect: bestImg.rect,
-        highlightRect: copyRect(bestImg.rect),
-        kind: "image",
-        score: bestImg.coverage * 1000,
-        circledText: "",
-        textHits: [],
-      };
-    }
-
-    if (textHits.length) {
-      let container = pickContainerForHits(textHits, pts, maxArea);
-      if (container) {
-        container = expandToMeaningful(container, maxArea) || container;
-        // If circled text is a complete price fragment assembly, snap money shell
-        const assembled = cleanText(circled);
-        if (isCompletePrice(assembled) || isPriceLike(assembled)) {
-          const money = bestMoneyChild(container, maxArea) || expandToMeaningful(container, maxArea);
-          if (money && (isCompletePrice(visibleText(money)) || isPriceLike(visibleText(money)))) {
-            container = money;
-          }
-        }
-
-        const finalText = preferFullText(assembled, visibleText(container));
-        const highlightRect = computeHighlightRect(container, textHits, finalText);
-        return {
-          el: container,
-          rect: highlightRect || container.getBoundingClientRect(),
-          highlightRect,
-          kind: kindOf(container),
-          score: scoreHarvestContainer(container, finalText, pts, maxArea),
-          circledText: finalText,
-          textHits,
-        };
-      }
-    }
-
-    // Fallback: previous sampling approach (sparse)
-    return resolveTargetFallback(pts, maxArea);
-  }
-
-  function preferFullText(circled, containerText) {
-    const c = cleanText(circled);
-    const t = cleanText(containerText);
-    if (!c) return t.slice(0, 2000);
-    if (!t) return c.slice(0, 2000);
-    if (isFragmentText(c) && !isFragmentText(t)) return t.slice(0, 2000);
-    // If container is basically the circled phrase (+ small extras), use container
-    if (t.includes(c) && t.length <= Math.max(c.length + 30, c.length * 1.35)) return t.slice(0, 2000);
-    // If circled already complete price, keep it
-    if (isCompletePrice(c)) return c;
-    // If container is complete price and circled is partial pieces of it
-    if (isCompletePrice(t) && t.replace(/\s/g, "").includes(c.replace(/\s/g, ""))) return t;
-    // If circled is clearly longer meaningful selection, keep circled
-    if (c.length >= 8 && c.length >= t.length * 0.6) return c.slice(0, 2000);
-    if (t.length <= 120 && longestOverlap(c, t) >= Math.min(c.length, 10)) return t.slice(0, 2000);
-    return c.slice(0, 2000);
-  }
-
-  function resolveTargetFallback(pts, maxArea) {
-    const b = pathBounds(pts);
-    const samples = [];
-    const step = Math.max(6, Math.min(16, Math.floor(Math.min(b.w, b.h) / 8) || 8));
-    for (let y = b.minY; y <= b.maxY; y += step) {
-      for (let x = b.minX; x <= b.maxX; x += step) {
-        if (pointInPolygon(x, y, pts)) samples.push({ x, y });
-      }
-    }
-    samples.push({ x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 });
-
-    const tallies = new Map();
-    for (const s of samples) {
-      const el = elementAt(s.x, s.y, maxArea);
-      if (!el) continue;
-      const refined = refineInsideCircle(el, pts, maxArea);
-      if (!refined || refined.score === -Infinity) continue;
-      if (isFragmentText(visibleText(refined.el))) continue;
-      const key = refined.el;
-      const prev = tallies.get(key) || { ...refined, hits: 0 };
-      prev.hits += 1;
-      prev.score = Math.max(prev.score, refined.score);
-      tallies.set(key, prev);
-    }
-
-    let best = null;
-    for (const c of tallies.values()) {
-      const finalScore = c.score + c.hits * 40;
-      if (!best || finalScore > best.finalScore) {
-        best = {
-          ...c,
-          finalScore,
-          rect: c.el.getBoundingClientRect(),
-          kind: kindOf(c.el),
-          circledText: visibleText(c.el),
-        };
-      }
-    }
-    return best;
-  }
-
-  function buildPayload(hit) {
-    const el = hit.el;
-    const kind = hit.kind;
-    let targetText = "";
-    let label = "";
-
-    if (kind === "image" || el.tagName === "IMG") {
-      const img = el.tagName === "IMG" ? el : el.querySelector("img") || el;
-      const alt = cleanText(img.getAttribute?.("alt") || "");
-      const src = img.currentSrc || img.src || "";
-      targetText = alt || `IMG:${shortUrl(src)}`;
-      label = alt ? `Imagem: ${alt}` : `Imagem (${shortUrl(src)})`;
-    } else {
-      const unit = expandToMeaningful(el, 90_000) || el;
-      hit.el = unit;
-      const assembled = cleanText(hit.circledText || "");
-      const all = visibleText(unit);
-      targetText = preferFullText(assembled, all);
-      if (isFragmentText(targetText) && !isFragmentText(all)) targetText = all;
-      if (isCompletePrice(all) && !isCompletePrice(targetText)) {
-        const m = all.match(
-          /r\$\s*\d{1,3}(?:\.\d{3})*(?:,\d{2})?|\d{1,3}(?:\.\d{3})*,\d{2}|\d+[.,]\d{2}/i
-        );
-        if (m) targetText = cleanText(m[0]);
-      }
-      label = targetText;
-    }
-
-    return {
-      url: location.href,
-      title: document.title || "",
-      targetText: cleanText(targetText).slice(0, 2000),
-      cssSelector: cssPath(hit.el),
-      kind,
-      label: cleanText(label).slice(0, 200),
-      capturedAt: new Date().toISOString(),
-    };
-  }
-
-  function findShortChildText(root) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-    let best = "";
-    while (walker.nextNode()) {
-      const n = walker.currentNode;
-      if (!(n instanceof Element) || n.children.length > 0) continue;
-      const t = cleanText(n.textContent || "");
-      if (t.length >= 1 && t.length <= 40) {
-        if (isPriceLike(t)) return t;
-        if (t.length > best.length) best = t;
-      }
-    }
-    return best;
-  }
-
-  function shortUrl(src) {
-    try {
-      const u = new URL(src, location.href);
-      return (u.pathname.split("/").filter(Boolean).pop() || u.hostname).slice(0, 80);
-    } catch {
-      return String(src).slice(0, 80);
-    }
-  }
-
-  function cssPath(el) {
-    if (!(el instanceof Element)) return null;
-    if (el.id) return `#${CSS.escape(el.id)}`;
-    const parts = [];
-    let cur = el;
-    while (cur && cur.nodeType === 1 && parts.length < 6) {
-      let part = cur.tagName.toLowerCase();
-      if (cur.classList?.length) {
-        const cls = [...cur.classList]
-          .filter((c) => c && !c.startsWith("vigil-"))
-          .slice(0, 2)
-          .map((c) => CSS.escape(c))
-          .join(".");
-        if (cls) part += `.${cls}`;
-      }
+  /** Full nth-of-type path from body: works on the live page, breaks first when the layout changes. */
+  function fullPath(el) {
+    const steps = [];
+    for (let cur = el; cur && cur !== document.body; cur = cur.parentElement) {
       const parent = cur.parentElement;
-      if (parent) {
-        const siblings = [...parent.children].filter((c) => c.tagName === cur.tagName);
-        if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(cur) + 1})`;
-      }
-      parts.unshift(part);
-      cur = parent;
-      if (cur?.id) {
-        parts.unshift(`#${CSS.escape(cur.id)}`);
-        break;
-      }
+      if (!parent) return null;
+      const same = [...parent.children].filter((c) => c.tagName === cur.tagName);
+      const tag = cur.tagName.toLowerCase();
+      steps.unshift(same.length === 1 ? tag : `${tag}:nth-of-type(${same.indexOf(cur) + 1})`);
     }
-    return parts.join(" > ");
+    return ["body", ...steps].join(" > ");
   }
 
-  function copyRect(r) {
-    return {
-      left: r.left,
-      top: r.top,
-      right: r.right,
-      bottom: r.bottom,
-      width: r.width,
-      height: r.height,
-      x: r.x ?? r.left,
-      y: r.y ?? r.top,
+  /** Candidates from most to least robust; the server keeps the first one that works on its copy of the page. */
+  function selectorsFor(el) {
+    const out = [];
+    const add = (sel) => {
+      if (sel && !out.includes(sel) && uniqueFor(sel, el)) out.push(sel);
     };
+    add(anchorOf(el));
+    add(anchoredPath(el));
+    add(fullPath(el));
+    return out.slice(0, 5);
   }
 
-  function unionRects(rects) {
-    const list = (rects || []).filter((r) => r && r.width > 0 && r.height > 0);
-    if (!list.length) return null;
-    let left = Infinity;
-    let top = Infinity;
-    let right = -Infinity;
-    let bottom = -Infinity;
-    for (const r of list) {
-      left = Math.min(left, r.left);
-      top = Math.min(top, r.top);
-      right = Math.max(right, r.right);
-      bottom = Math.max(bottom, r.bottom);
+  // Scope (maior / menor)
+
+  function biggerOf(el) {
+    const p = el.parentElement;
+    if (!p || p === document.body || p === document.documentElement) return null;
+    // Skip wrappers that look exactly the same.
+    let cur = p;
+    while (cur.parentElement && cur.parentElement !== document.body && squash(textOf(cur.parentElement)) === squash(textOf(cur)) && area(cur.parentElement.getBoundingClientRect()) <= area(cur.getBoundingClientRect()) * 1.05) {
+      cur = cur.parentElement;
     }
-    return {
-      left,
-      top,
-      right,
-      bottom,
-      width: Math.max(0, right - left),
-      height: Math.max(0, bottom - top),
-      x: left,
-      y: top,
-    };
+    return squash(textOf(cur)) === squash(textOf(el)) ? cur : p;
   }
 
-  /** Caixa visual = união de todos os pedaços de texto/imagem selecionados. */
-  function computeHighlightRect(el, textHits, targetText) {
-    const rects = [];
-
-    if (textHits?.length) {
-      for (const h of textHits) {
-        if (h.rect) rects.push(h.rect);
-      }
+  function smallerOf(el, captured) {
+    const want = squash(captured);
+    const kids = [...el.children].filter((c) => !isOurs(c) && squash(textOf(c)).length >= 2 && area(c.getBoundingClientRect()) > 0);
+    if (!kids.length) return null;
+    // The child that holds what was circled, else the one with most text.
+    const holding = kids.find((c) => want && squash(textOf(c)).includes(want.slice(0, 40)));
+    let pick = holding || kids.sort((a, b) => textOf(b).length - textOf(a).length)[0];
+    // Skip wrappers with the same text, so "menor" always changes something.
+    while (pick && squash(textOf(pick)) === squash(textOf(el))) {
+      const inner = [...pick.children].filter((c) => squash(textOf(c)).length >= 2);
+      if (!inner.length) return null;
+      pick = inner.find((c) => want && squash(textOf(c)).includes(want.slice(0, 40))) || inner[0];
     }
-
-    if (el instanceof Element) {
-      // Rects reais do texto dentro do elemento (melhor que getBoundingClientRect em layouts quebrados)
-      try {
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        for (const r of range.getClientRects()) {
-          if (r.width > 1 && r.height > 1) rects.push(r);
-        }
-      } catch {
-        /* ignore */
-      }
-
-      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-      let n = 0;
-      while (walker.nextNode() && n++ < 200) {
-        const node = walker.currentNode;
-        const raw = String(node.textContent || "");
-        if (!raw.trim()) continue;
-        try {
-          const range = document.createRange();
-          range.selectNodeContents(node);
-          for (const r of range.getClientRects()) {
-            if (r.width > 0 && r.height > 0) rects.push(r);
-          }
-        } catch {
-          /* ignore */
-        }
-      }
-
-      const br = el.getBoundingClientRect();
-      if (br.width > 1 && br.height > 1) rects.push(br);
-
-      // Se o targetText for maior que o texto do el, sobe um pouco e pega rects do pai
-      const tip = cleanText(targetText || "");
-      const own = visibleText(el);
-      if (tip && own && tip.length > own.length + 2 && el.parentElement) {
-        let parent = el.parentElement;
-        for (let i = 0; i < 4 && parent; i++) {
-          const pt = visibleText(parent);
-          if (pt && (pt.includes(tip.slice(0, Math.min(20, tip.length))) || tip.includes(pt.slice(0, 20)))) {
-            try {
-              const range = document.createRange();
-              range.selectNodeContents(parent);
-              for (const r of range.getClientRects()) {
-                if (r.width > 1 && r.height > 1) rects.push(r);
-              }
-            } catch {
-              /* ignore */
-            }
-            rects.push(parent.getBoundingClientRect());
-            break;
-          }
-          parent = parent.parentElement;
-        }
-      }
-    }
-
-    const united = unionRects(rects);
-    if (!united) return null;
-
-    // Evita caixa gigante: se união ficou absurda vs hits, usa só os hits
-    if (textHits?.length) {
-      const hitsOnly = unionRects(textHits.map((h) => h.rect));
-      if (hitsOnly) {
-        const hitsArea = hitsOnly.width * hitsOnly.height;
-        const unionArea = united.width * united.height;
-        if (hitsArea > 40 && unionArea > hitsArea * 8) return hitsOnly;
-        // Prefer the larger of hits vs element text rects when both are reasonable
-        if (hitsOnly.width >= united.width * 0.85 && hitsOnly.height >= united.height * 0.85) {
-          return unionRects([united, hitsOnly]);
-        }
-        return unionRects([united, hitsOnly]);
-      }
-    }
-    return united;
+    return pick || null;
   }
 
-  function placeHighlight(rect) {
-    clearHighlight(false);
-    if (!rect || !(rect.width > 0) || !(rect.height > 0)) return;
-    highlightEl = document.createElement("div");
-    highlightEl.className = "vigil-highlight";
-    highlightEl.innerHTML = `<div class="vigil-highlight-ring"></div><div class="vigil-highlight-glow"></div>`;
-    document.documentElement.appendChild(highlightEl);
-    const pad = 5;
-    Object.assign(highlightEl.style, {
-      left: `${Math.max(0, rect.left - pad)}px`,
-      top: `${Math.max(0, rect.top - pad)}px`,
-      width: `${Math.max(10, rect.width + pad * 2)}px`,
-      height: `${Math.max(10, rect.height + pad * 2)}px`,
+  // UI
+
+  const CSS_TEXT = `
+    :host { all: initial; }
+    * { box-sizing: border-box; }
+    .layer { position: fixed; inset: 0; pointer-events: none; z-index: 2147483647;
+      font-family: "Vigil Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --bg: #ffffff; --bg-2: #f6f5f2; --bg-3: #efede8; --line: #e7e4dd; --line-2: #d9d5cc;
+      --text: #18191b; --text-2: #5c5e63; --text-3: #8d8f94;
+      --red: #e5372b; --red-ink: #b8261c; --red-soft: #fdeceb;
+      --ok: #16794a; --ok-soft: #e6f4ec; --warn: #9a5b06; --warn-soft: #fcf1df;
+      --shadow: 0 1px 2px rgba(20,20,20,.06), 0 12px 32px -8px rgba(20,20,20,.22), 0 0 0 1px rgba(20,20,20,.06);
+      color: var(--text); font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+    @media (prefers-color-scheme: dark) {
+      .layer { --bg: #1c1c1f; --bg-2: #242428; --bg-3: #2c2c31; --line: #313136; --line-2: #3d3d43;
+        --text: #ededef; --text-2: #a7a7ad; --text-3: #7c7c83; --red: #ff5b4f; --red-ink: #ff8a80; --red-soft: #3a1f1d;
+        --ok: #4cc38a; --ok-soft: #17301f; --warn: #f0b155; --warn-soft: #33270f;
+        --shadow: 0 1px 2px rgba(0,0,0,.4), 0 16px 40px -8px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.07); }
+    }
+    canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: auto; touch-action: none;
+      cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cpath d='M4 24l3.5-1 14-14-2.5-2.5-14 14z' fill='%23e5372b' stroke='white' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M19 6.5l2.5 2.5 2-2a1.77 1.77 0 0 0-2.5-2.5z' fill='%2318191b' stroke='white' stroke-width='1.5'/%3E%3C/svg%3E") 3 25, crosshair; }
+    .hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
+      padding: 8px 8px 8px 14px; border-radius: 999px; background: #18191b; color: #fff; font-size: 13px; font-weight: 500;
+      box-shadow: 0 8px 24px -6px rgba(0,0,0,.35); pointer-events: auto; animation: drop .18s ease-out; white-space: nowrap; }
+    .hint .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 3px rgba(229,55,43,.25); }
+    .hint button { all: unset; cursor: pointer; font-size: 12px; color: #d4d4d8; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,.1); }
+    .hint button:hover { background: rgba(255,255,255,.18); color: #fff; }
+    .hint.warn { background: var(--red-ink); }
+    .hl { position: fixed; border-radius: 6px; border: 2px solid var(--red); background: rgba(229,55,43,.07);
+      box-shadow: 0 0 0 4px rgba(229,55,43,.14); transition: all .16s ease; }
+    .hl.saved { border-color: var(--ok); background: rgba(22,121,74,.08); box-shadow: 0 0 0 4px rgba(22,121,74,.16); }
+    .hl .tag { position: absolute; top: -24px; left: -2px; background: var(--red); color: #fff; font-size: 11px; font-weight: 600;
+      padding: 3px 8px; border-radius: 6px 6px 6px 0; white-space: nowrap; }
+    .hl.saved .tag { background: var(--ok); }
+    .hl.below .tag { top: auto; bottom: -24px; border-radius: 0 6px 6px 6px; }
+    .card { position: fixed; top: 16px; right: 16px; width: 360px; max-height: calc(100vh - 32px); overflow: auto; pointer-events: auto;
+      background: var(--bg); border-radius: 14px; box-shadow: var(--shadow); animation: pop .2s cubic-bezier(.2,.9,.3,1.2); }
+    @media (max-width: 720px) { .card { top: auto; bottom: 12px; left: 12px !important; right: 12px !important; width: auto; } }
+    .head { display: flex; align-items: center; gap: 10px; padding: 14px 14px 0 16px; }
+    .head .title { font-weight: 650; font-size: 14px; letter-spacing: -.01em; flex: 1; }
+    .icon-btn { all: unset; cursor: pointer; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--text-3); }
+    .icon-btn:hover { background: var(--bg-3); color: var(--text); }
+    .body { padding: 12px 16px 16px; display: grid; gap: 14px; }
+    .preview { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+    .preview .text { font-size: 13px; color: var(--text); max-height: 7.4em; overflow: hidden; position: relative; word-break: break-word;
+      -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+    .preview .text.short { -webkit-mask-image: none; mask-image: none; }
+    .preview mark { background: rgba(229,55,43,.16); color: inherit; border-radius: 3px; padding: 0 1px; }
+    .scope { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+    .scope .what { flex: 1; color: var(--text-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chip-btn { all: unset; cursor: pointer; font-size: 12px; font-weight: 550; color: var(--text-2); padding: 3px 9px; border-radius: 7px;
+      border: 1px solid var(--line-2); background: var(--bg); display: inline-flex; align-items: center; gap: 4px; }
+    .chip-btn:hover:not([disabled]) { color: var(--text); border-color: var(--text-3); }
+    .chip-btn[disabled] { opacity: .4; cursor: default; }
+    .status { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--text-2); }
+    .status svg { flex: none; margin-top: 1px; }
+    .status.ok { color: var(--ok); } .status.warn { color: var(--warn); } .status.bad { color: var(--red-ink); }
+    .status code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--bg-3); padding: 1px 5px; border-radius: 5px; color: var(--text); }
+    .status button { all: unset; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+    .spin { animation: spin .8s linear infinite; }
+    .field { display: grid; gap: 6px; }
+    .label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+    .seg { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--bg-3); padding: 3px; border-radius: 10px; gap: 2px; }
+    .seg button { all: unset; cursor: pointer; text-align: center; font-size: 13px; font-weight: 550; color: var(--text-2); padding: 6px 0; border-radius: 8px; }
+    .seg button:hover { color: var(--text); }
+    .seg button[aria-pressed="true"] { background: var(--bg); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 0 0 1px var(--line); }
+    .help { font-size: 12px; color: var(--text-3); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    input, select { all: unset; box-sizing: border-box; width: 100%; font-size: 13px; color: var(--text); background: var(--bg);
+      border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 10px; }
+    select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238d8f94' stroke-width='1.5'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 10px center; padding-right: 26px; cursor: pointer; }
+    input:focus, select:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(229,55,43,.15); }
+    .actions { display: flex; gap: 8px; align-items: center; }
+    .btn { all: unset; cursor: pointer; font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 9px; text-align: center; }
+    .btn.primary { background: var(--red); color: #fff; flex: 1; box-shadow: inset 0 -1px 0 rgba(0,0,0,.12); }
+    .btn.primary:hover:not([disabled]) { filter: brightness(1.06); }
+    .btn.primary[disabled] { opacity: .45; cursor: default; }
+    .btn.ghost { color: var(--text-2); }
+    .btn.ghost:hover { background: var(--bg-3); color: var(--text); }
+    .redo { all: unset; cursor: pointer; font-size: 12px; color: var(--text-3); text-decoration: underline; text-underline-offset: 2px; }
+    .redo:hover { color: var(--text); }
+    .done { padding: 22px 18px 18px; display: grid; gap: 6px; justify-items: start; }
+    .done .badge { width: 36px; height: 36px; border-radius: 50%; background: var(--ok-soft); color: var(--ok); display: grid; place-items: center; margin-bottom: 4px; }
+    .done h3 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+    .done p { margin: 0; color: var(--text-2); }
+    .done .actions { margin-top: 10px; width: 100%; }
+    .err { font-size: 12.5px; color: var(--red-ink); background: var(--red-soft); padding: 8px 10px; border-radius: 8px; }
+    @keyframes pop { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
+    @keyframes drop { from { opacity: 0; transform: translate(-50%, -8px); } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  `;
+
+  const ICONS = {
+    logo: `<svg width="22" height="22" viewBox="0 0 32 32" fill="none"><path d="M5.5 17.5c-1.6-6.3 4-11.6 11.2-11.4 7 .2 11.6 4.6 10.4 10.4-1.2 6-7.6 9.4-13.6 8.6C8 24.4 4.4 20.6 6 15.2" stroke="#e5372b" stroke-width="2.6" stroke-linecap="round"/><circle cx="16.4" cy="15.6" r="3.4" fill="currentColor"/></svg>`,
+    close: `<svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`,
+    ok: `<svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="currentColor" opacity=".15"/><path d="M5 8.2l2 2 4-4.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    warn: `<svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="currentColor" opacity=".15"/><path d="M8 4.5v4.2M8 11.2v.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+    spin: `<svg class="spin" width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-opacity=".2" stroke-width="2"/><path d="M14 8a6 6 0 0 0-6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
+    check: `<svg width="18" height="18" viewBox="0 0 18 18"><path d="M4 9.5l3.2 3L14 5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    minus: `<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`,
+    plus: `<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5h6M5 2v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`,
+  };
+
+  function mount() {
+    if (host?.isConnected) return;
+    host = document.createElement("vigil-ui");
+    host.style.cssText = "all: initial; position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;";
+    root = host.attachShadow({ mode: "open" });
+    const style = document.createElement("style");
+    style.textContent = CSS_TEXT;
+    const layer = h("div", { class: "layer" });
+    root.append(style, layer);
+    ui = { layer };
+    document.documentElement.append(host);
+    loadFont();
+  }
+
+  let fontLoaded = false;
+  function loadFont() {
+    if (fontLoaded) return;
+    fontLoaded = true;
+    try {
+      const face = new FontFace("Vigil Inter", `url(${chrome.runtime.getURL("fonts/inter.woff2")}) format("woff2")`, { weight: "100 900" });
+      face.load().then((f) => document.fonts.add(f)).catch(() => {});
+    } catch {
+      /* system font is fine */
+    }
+  }
+
+  function showHint(text, { warn = false, button } = {}) {
+    ui.hint?.remove();
+    ui.hint = h("div", { class: `hint${warn ? " warn" : ""}` }, h("span", { class: "dot" }), h("span", {}, text), button);
+    ui.layer.append(ui.hint);
+  }
+
+  function hideHint() {
+    ui.hint?.remove();
+    ui.hint = null;
+  }
+
+  // Pen
+
+  function startPen() {
+    mount();
+    closeCard();
+    penOn = true;
+    const canvas = h("canvas");
+    ui.canvas = canvas;
+    ui.layer.append(canvas);
+    sizeCanvas();
+    canvas.addEventListener("pointerdown", onDown);
+    canvas.addEventListener("pointermove", onMove);
+    canvas.addEventListener("pointerup", onUp);
+    canvas.addEventListener("pointercancel", onUp);
+    window.addEventListener("resize", sizeCanvas);
+    showHint("Circule o que você quer vigiar", { button: h("button", { onclick: stopPen }, "Esc para sair") });
+  }
+
+  function stopPen() {
+    penOn = false;
+    drawing = false;
+    ui.canvas?.remove();
+    ui.canvas = null;
+    window.removeEventListener("resize", sizeCanvas);
+    hideHint();
+  }
+
+  function sizeCanvas() {
+    if (!ui.canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    ui.canvas.width = innerWidth * dpr;
+    ui.canvas.height = innerHeight * dpr;
+    const ctx = ui.canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function drawStroke(alpha = 1) {
+    const ctx = ui.canvas?.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    if (points.length < 2) return;
+    ctx.globalAlpha = alpha;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#e5372b";
+    ctx.lineWidth = 3.5;
+    ctx.shadowColor = "rgba(229,55,43,.35)";
+    ctx.shadowBlur = 4;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length - 1; i++) {
+      const mx = (points[i].x + points[i + 1].x) / 2;
+      const my = (points[i].y + points[i + 1].y) / 2;
+      ctx.quadraticCurveTo(points[i].x, points[i].y, mx, my);
+    }
+    ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  function onDown(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    drawing = true;
+    points = [{ x: e.clientX, y: e.clientY }];
+    ui.canvas.setPointerCapture?.(e.pointerId);
+  }
+
+  function onMove(e) {
+    if (!drawing) return;
+    const last = points[points.length - 1];
+    if (Math.hypot(e.clientX - last.x, e.clientY - last.y) < 2) return;
+    points.push({ x: e.clientX, y: e.clientY });
+    drawStroke();
+  }
+
+  function onUp(e) {
+    if (!drawing) return;
+    drawing = false;
+    try {
+      ui.canvas.releasePointerCapture?.(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    let length = 0;
+    for (let i = 1; i < points.length; i++) length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+    if (points.length < 4 || length < 30) {
+      points = [];
+      drawStroke();
+      showHint("Faça um círculo em volta do trecho", { warn: true, button: h("button", { onclick: stopPen }, "Esc para sair") });
+      return;
+    }
+    const found = resolve(points);
+    if (!found) {
+      points = [];
+      drawStroke();
+      showHint("Não achei texto aí dentro. Tente de novo", { warn: true, button: h("button", { onclick: stopPen }, "Esc para sair") });
+      return;
+    }
+    fadeStroke();
+    stopPen();
+    target = found;
+    mode = "text_changed";
+    openCard();
+  }
+
+  function fadeStroke() {
+    // Leave a ghost of the stroke for a moment, on a canvas that is not interactive.
+    const ghost = h("canvas", { style: "pointer-events:none;transition:opacity .45s ease" });
+    ghost.width = ui.canvas.width;
+    ghost.height = ui.canvas.height;
+    ghost.getContext("2d").drawImage(ui.canvas, 0, 0);
+    ui.layer.append(ghost);
+    requestAnimationFrame(() => (ghost.style.opacity = "0"));
+    setTimeout(() => ghost.remove(), 500);
+  }
+
+  // Highlight that follows the element on scroll
+
+  function placeHighlight() {
+    if (!target || !ui.hl) return;
+    const r = target.el.getBoundingClientRect();
+    const pad = 4;
+    Object.assign(ui.hl.style, {
+      left: `${r.left - pad}px`,
+      top: `${r.top - pad}px`,
+      width: `${r.width + pad * 2}px`,
+      height: `${r.height + pad * 2}px`,
     });
+    ui.hl.classList.toggle("below", r.top < 30);
   }
 
-  function clearHighlight(cancelTimer = true) {
-    if (cancelTimer) clearTimeout(highlightTimer);
-    highlightEl?.remove();
-    highlightEl = null;
+  function follow() {
+    cancelAnimationFrame(followRaf);
+    const loop = () => {
+      placeHighlight();
+      followRaf = requestAnimationFrame(loop);
+    };
+    followRaf = requestAnimationFrame(loop);
   }
 
-  function showConfirmBar(payload) {
-    hideConfirmBar();
-    confirmBar = document.createElement("div");
-    confirmBar.className = "vigil-confirm";
-    confirmBar.innerHTML = `
-      <div class="vigil-confirm-inner">
-        <div class="vigil-confirm-label">${escapeHtml(payload.label || payload.targetText)}</div>
-        <div class="vigil-confirm-meta">${payload.kind === "image" ? "Imagem" : "Texto"} · confirme no painel Vigil</div>
-      </div>
-    `;
-    document.documentElement.appendChild(confirmBar);
-    requestAnimationFrame(() => confirmBar.classList.add("show"));
+  function describe(el) {
+    const name = TAG_NAMES[el.tagName] || "bloco";
+    const n = textOf(el).length;
+    return `${name} · ${n.toLocaleString("pt-BR")} ${n === 1 ? "caractere" : "caracteres"}`;
   }
 
-  function hideConfirmBar() {
-    confirmBar?.remove();
-    confirmBar = null;
+  // Card
+
+  function pageLabel() {
+    const t = clean(document.title).slice(0, 90) || location.hostname.replace(/^www\./, "");
+    if (mode === "text_changed" || !target) return t;
+    // Two alerts on the same page should not get the same name.
+    const what = presenceText();
+    return `“${what.length > 40 ? `${what.slice(0, 38)}...` : what}” em ${t}`;
   }
 
-  function escapeHtml(s) {
-    return String(s)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;");
+  function pageUrl() {
+    return location.href.replace(/#.*$/, "");
   }
 
-  function showToast(msg) {
-    if (!toastEl) {
-      toastEl = document.createElement("div");
-      toastEl.className = "vigil-toast";
-      document.documentElement.appendChild(toastEl);
+  function presenceText() {
+    return clean(ui.textInput?.value || target.captured);
+  }
+
+  function openCard() {
+    mount();
+    closeCard({ keepTarget: true });
+    ui.hl = h("div", { class: "hl" }, h("span", { class: "tag" }, "vigiar isto"));
+    ui.layer.append(ui.hl);
+    follow();
+
+    ui.card = h("div", { class: "card", role: "dialog", "aria-label": "Vigiar este trecho" });
+    ui.layer.append(ui.card);
+    renderForm();
+    placeCard();
+    runProbe();
+    document.addEventListener("keydown", onKey, true);
+  }
+
+  /** Puts the card in the corner that covers the least of the chosen element. */
+  function placeCard() {
+    if (innerWidth <= 720) return; // bottom sheet, see CSS
+    const r = target.el.getBoundingClientRect();
+    const hl = { left: r.left - 8, right: r.right + 8, top: r.top - 30, bottom: r.bottom + 8 };
+    const w = 360;
+    const ht = Math.min(ui.card.getBoundingClientRect().height || 480, innerHeight - 32);
+    const spots = [
+      { css: { right: "16px", top: "16px" }, box: { left: innerWidth - 16 - w, right: innerWidth - 16, top: 16, bottom: 16 + ht } },
+      { css: { left: "16px", top: "16px" }, box: { left: 16, right: 16 + w, top: 16, bottom: 16 + ht } },
+      { css: { right: "16px", bottom: "16px", top: "auto" }, box: { left: innerWidth - 16 - w, right: innerWidth - 16, top: innerHeight - 16 - ht, bottom: innerHeight - 16 } },
+      { css: { left: "16px", bottom: "16px", top: "auto" }, box: { left: 16, right: 16 + w, top: innerHeight - 16 - ht, bottom: innerHeight - 16 } },
+    ];
+    const overlap = (a) => Math.max(0, Math.min(a.right, hl.right) - Math.max(a.left, hl.left)) * Math.max(0, Math.min(a.bottom, hl.bottom) - Math.max(a.top, hl.top));
+    let best = spots[0];
+    for (const spot of spots) if (overlap(spot.box) < overlap(best.box) - 1) best = spot;
+    Object.assign(ui.card.style, { left: "auto", right: "auto", top: "auto", bottom: "auto", ...best.css });
+  }
+
+  function closeCard({ keepTarget = false } = {}) {
+    cancelAnimationFrame(followRaf);
+    ui.hl?.remove();
+    ui.card?.remove();
+    ui.hl = ui.card = ui.textInput = ui.label = null;
+    ui.labelEdited = false;
+    document.removeEventListener("keydown", onKey, true);
+    if (!keepTarget) target = null;
+  }
+
+  function onKey(e) {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      closeCard();
+    } else if (e.key === "Enter" && ui.card && !e.isComposing && root.activeElement?.tagName !== "SELECT") {
+      if (root.activeElement && ui.card.contains(root.activeElement)) {
+        e.preventDefault();
+        save();
+      }
     }
-    toastEl.textContent = msg;
-    toastEl.classList.add("show");
-    clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => toastEl?.classList.remove("show"), 2600);
   }
+
+  function previewNode() {
+    const full = textOf(target.el) || target.captured;
+    const text = h("div", { class: `text${full.length < 220 ? " short" : ""}` });
+    const shown = full.slice(0, 700);
+    const idx = target.captured && target.captured.length < full.length * 0.9 ? shown.toLowerCase().indexOf(target.captured.toLowerCase()) : -1;
+    if (idx >= 0) {
+      text.append(shown.slice(0, idx), h("mark", {}, shown.slice(idx, idx + target.captured.length)), shown.slice(idx + target.captured.length));
+    } else {
+      text.append(shown);
+    }
+    return text;
+  }
+
+  function renderForm() {
+    const card = ui.card;
+    card.replaceChildren();
+    const bigger = biggerOf(target.el);
+    const smaller = smallerOf(target.el, target.captured);
+
+    const head = h("div", { class: "head" },
+      h("span", { html: ICONS.logo, style: "display:grid;color:var(--text)" }),
+      h("span", { class: "title" }, "Vigiar este trecho"),
+      h("button", { class: "icon-btn", title: "Fechar", "aria-label": "Fechar", onclick: () => closeCard(), html: ICONS.close })
+    );
+
+    const presence = mode !== "text_changed";
+    const preview = presence
+      ? h("div", { class: "field" },
+          h("label", { class: "label", for: "vigil-text" }, mode === "text_appears" ? "Texto que deve aparecer" : "Texto que deve sumir"),
+          (ui.textInput = h("input", { id: "vigil-text", value: ui.textInput?.value ?? target.captured, oninput: debounceProbe })))
+      : h("div", { class: "preview" },
+          previewNode(),
+          h("div", { class: "scope" },
+            h("span", { class: "what", title: "O que será comparado" }, describe(target.el)),
+            h("button", { class: "chip-btn", disabled: !smaller, title: "Pegar um elemento menor", onclick: () => rescope(smaller) }, h("span", { html: ICONS.minus }), "Menor"),
+            h("button", { class: "chip-btn", disabled: !bigger, title: "Pegar o elemento em volta", onclick: () => rescope(bigger) }, h("span", { html: ICONS.plus }), "Maior")
+          ));
+    if (!presence) ui.textInput = null;
+
+    ui.status = h("div", { class: "status" });
+    renderStatus();
+
+    const seg = h("div", { class: "seg", role: "group", "aria-label": "Avisar quando" },
+      Object.entries(MODES).map(([key, m]) =>
+        h("button", { "aria-pressed": String(key === mode), onclick: () => setMode(key) }, m.label)));
+
+    const keepLabel = ui.label && ui.labelEdited;
+    ui.label = h("input", { value: keepLabel ? ui.label.value : pageLabel(), maxlength: "200", "aria-label": "Nome", oninput: () => (ui.labelEdited = true) });
+    ui.interval = h("select", { "aria-label": "Checar a cada", onchange: (e) => (interval = Number(e.target.value)) },
+      INTERVALS.map(([v, text]) => h("option", { value: String(v), selected: v === interval }, text)));
+
+    ui.saveBtn = h("button", { class: "btn primary", onclick: save }, "Vigiar");
+    ui.error = h("div", { class: "err", style: "display:none" });
+
+    card.append(head, h("div", { class: "body" },
+      preview,
+      ui.status,
+      h("div", { class: "field" }, h("span", { class: "label" }, "Avisar quando o trecho"), seg, h("span", { class: "help" }, MODES[mode].hint)),
+      h("div", { class: "row" },
+        h("div", { class: "field" }, h("span", { class: "label" }, "Nome"), ui.label),
+        h("div", { class: "field" }, h("span", { class: "label" }, "Checar a cada"), ui.interval)),
+      ui.error,
+      h("div", { class: "actions" },
+        ui.saveBtn,
+        h("button", { class: "btn ghost", onclick: () => { closeCard(); startPen(); } }, "Circular de novo"))
+    ));
+    updateSave();
+  }
+
+  function setMode(next) {
+    if (next === mode) return;
+    mode = next;
+    renderForm();
+    runProbe();
+  }
+
+  function rescope(el) {
+    if (!el) return;
+    const before = textOf(target.el);
+    target.history.push(target.el);
+    target.el = el;
+    // Keep what was circled if the new element still holds it, else the element's own text.
+    if (!squash(textOf(el)).includes(squash(target.captured))) target.captured = textOf(el).slice(0, 300);
+    else if (squash(before) === squash(target.captured)) target.captured = textOf(el).slice(0, 300);
+    renderForm();
+    runProbe();
+  }
+
+  let probeTimer = 0;
+  function debounceProbe() {
+    clearTimeout(probeTimer);
+    probeTimer = setTimeout(runProbe, 450);
+  }
+
+  async function runProbe() {
+    const seq = ++probeSeq;
+    target.selectors = selectorsFor(target.el);
+    probeState = { status: "loading" };
+    renderStatus();
+    const text = mode === "text_changed" ? target.captured : presenceText();
+    const res = await send({ type: "vigil:probe", url: pageUrl(), selectors: mode === "text_changed" ? target.selectors : [], text });
+    if (seq !== probeSeq || !ui.card) return;
+    if (!res.ok) probeState = { status: res.offline ? "offline" : "fetch-error", error: res.error };
+    else probeState = { status: "done", result: res.data };
+    renderStatus();
+  }
+
+  /** Decides what the card says about the server's view and whether saving makes sense. */
+  function verdict() {
+    const s = probeState;
+    if (s.status === "loading" || s.status === "idle") return { cls: "", icon: ICONS.spin, text: "Conferindo se o Vigil enxerga isso na página...", canSave: false };
+    if (s.status === "offline") {
+      return { cls: "bad", icon: ICONS.warn, html: `O Vigil não está rodando. Abra a pasta do projeto e rode <code>npm start</code>. <button data-retry>Tentar de novo</button>`, canSave: false };
+    }
+    if (s.status === "fetch-error") {
+      return { cls: "warn", icon: ICONS.warn, text: `O Vigil não conseguiu abrir esta página: ${s.error}. Dá para salvar, mas os checks vão falhar.`, canSave: true, label: "Vigiar mesmo assim" };
+    }
+    const r = s.result;
+    if (mode === "text_changed") {
+      if (r.selector) return { cls: "ok", icon: ICONS.ok, text: "O Vigil enxerga este trecho na página.", canSave: true };
+      if (r.textFound) return { cls: "warn", icon: ICONS.warn, text: "A estrutura da página muda depois de carregar. Vou achar o trecho pelo texto.", canSave: true };
+      return { cls: "bad", icon: ICONS.warn, text: "Este trecho não vem no HTML da página (é montado por JavaScript), então o Vigil não consegue ler. Tente um trecho maior ou outro ponto.", canSave: false };
+    }
+    if (mode === "text_appears") {
+      if (presenceText().length < 2) return { cls: "bad", icon: ICONS.warn, text: "Escreva o texto que você espera ver.", canSave: false };
+      if (r.textFound) return { cls: "warn", icon: ICONS.warn, text: "Esse texto já está na página. Só aviso se ele sumir e depois voltar.", canSave: true };
+      return { cls: "ok", icon: ICONS.ok, text: "Hoje esse texto não está na página. Aviso quando aparecer.", canSave: true };
+    }
+    if (presenceText().length < 2) return { cls: "bad", icon: ICONS.warn, text: "Escreva o texto que deve sumir.", canSave: false };
+    if (r.textFound) return { cls: "ok", icon: ICONS.ok, text: "O Vigil acha esse texto na página. Aviso quando ele sumir.", canSave: true };
+    return { cls: "bad", icon: ICONS.warn, text: "O Vigil não acha esse texto no HTML da página, então não teria como ver ele sumir.", canSave: false };
+  }
+
+  function renderStatus() {
+    if (!ui.status) return;
+    const v = verdict();
+    ui.status.className = `status ${v.cls}`;
+    ui.status.replaceChildren(h("span", { html: v.icon, style: "display:grid" }), h("span", v.html ? { html: v.html } : {}, v.html ? null : v.text));
+    ui.status.querySelector("[data-retry]")?.addEventListener("click", runProbe);
+    updateSave(v);
+  }
+
+  function updateSave(v = verdict()) {
+    if (!ui.saveBtn) return;
+    ui.saveBtn.disabled = saving || !v.canSave;
+    ui.saveBtn.textContent = saving ? "Salvando..." : v.label || "Vigiar";
+  }
+
+  async function save() {
+    const v = verdict();
+    if (saving || !v.canSave) return;
+    saving = true;
+    updateSave(v);
+    ui.error.style.display = "none";
+    const result = probeState.result;
+    const presence = mode !== "text_changed";
+    const watch = {
+      url: pageUrl(),
+      label: clean(ui.label.value) || pageLabel(),
+      monitorMode: mode,
+      targetText: presence ? presenceText() : target.captured.slice(0, 2000),
+      cssSelector: presence ? null : result?.selector ?? null,
+      intervalMinutes: interval,
+    };
+    const res = await send({ type: "vigil:save", watch });
+    saving = false;
+    if (!ui.card) return;
+    if (!res.ok) {
+      ui.error.textContent = res.offline ? "O Vigil parou de responder. Ele ainda está rodando?" : res.error;
+      ui.error.style.display = "";
+      updateSave();
+      return;
+    }
+    showDone(res.data);
+  }
+
+  function showDone(data) {
+    ui.hl?.classList.add("saved");
+    ui.hl?.querySelector(".tag")?.replaceChildren("vigiando");
+    const check = data.check;
+    const failed = check?.status === "error";
+    const msg = failed
+      ? `Salvei, mas a primeira leitura falhou: ${check.error}`
+      : `Primeira leitura feita. Checo a cada ${INTERVALS.find(([v]) => v === interval)?.[1] ?? `${interval} min`} e aviso aqui no navegador quando ${mode === "text_changed" ? "mudar" : mode === "text_appears" ? "aparecer" : "sumir"}.`;
+    ui.card.replaceChildren(
+      h("div", { class: "done" },
+        h("div", { class: "badge", html: failed ? ICONS.warn : ICONS.check }),
+        h("h3", {}, failed ? "Salvo, com um problema" : "Pronto, estou de olho"),
+        h("p", {}, msg),
+        h("div", { class: "actions" },
+          h("button", { class: "btn primary", onclick: () => send({ type: "vigil:open-panel", watchId: data.watch.id }) }, "Ver no painel"),
+          h("button", { class: "btn ghost", onclick: () => closeCard() }, "Fechar"))));
+    clearTimeout(ui.doneTimer);
+    ui.doneTimer = setTimeout(() => closeCard(), 9000);
+  }
+
+  // Wiring
+
+  function onMessage(msg, _sender, sendResponse) {
+    if (msg?.type === "vigil:pen") {
+      if (msg.on) startPen();
+      else stopPen();
+      sendResponse({ ok: true });
+    }
+  }
+  chrome.runtime.onMessage.addListener(onMessage);
+
+  function onGlobalKey(e) {
+    if (e.key === "Escape" && penOn) {
+      e.stopPropagation();
+      stopPen();
+    }
+  }
+  window.addEventListener("keydown", onGlobalKey, true);
+
+  window.__vigilPen = {
+    alive: () => {
+      try {
+        return Boolean(chrome.runtime?.id);
+      } catch {
+        return false;
+      }
+    },
+    destroy: () => {
+      stopPen();
+      closeCard();
+      host?.remove();
+      window.removeEventListener("keydown", onGlobalKey, true);
+      try {
+        chrome.runtime.onMessage.removeListener(onMessage);
+      } catch {
+        /* runtime gone */
+      }
+    },
+    // For the end-to-end script: what the pen resolved and which selectors it built.
+    debug: () => target && { captured: target.captured, tag: target.el.tagName, text: textOf(target.el).slice(0, 200), selectors: selectorsFor(target.el), probe: probeState },
+  };
 })();
