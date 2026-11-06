@@ -1,14 +1,11 @@
 {
   "name": "vigil",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/api/index.ts",
-    "start": "tsx src/api/index.ts",
-    "worker": "tsx src/worker/index.ts",
-    "db:migrate": "tsx src/db/migrate.ts",
-    "db:studio": "drizzle-kit studio",
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
@@ -16,20 +13,17 @@
     "@hono/node-server": "^1.14.1",
     "cheerio": "^1.0.0",
     "diff": "^7.0.0",
-    "dotenv": "^16.5.0",
-    "drizzle-orm": "^0.43.1",
     "hono": "^4.7.8",
-    "postgres": "^3.4.5",
+    "tsx": "^4.19.3",
     "zod": "^3.24.3"
   },
   "devDependencies": {
     "@types/diff": "^7.0.2",
-    "@types/node": "^22.14.1",
-    "drizzle-kit": "^0.31.0",
-    "tsx": "^4.19.3",
+    "@types/node": "^24.19.2",
     "typescript": "^5.8.3"
   },
   "engines": {
-    "node": ">=20"
-  }
+    "node": ">=22.13"
+  },
+  "description": "Vigia um trecho de página e avisa quando ele muda, aparece ou some. Roda na sua máquina."
 }

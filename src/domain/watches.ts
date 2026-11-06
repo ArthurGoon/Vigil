@@ -1,149 +1,104 @@
-import { and, count, eq } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "../db/client.js";
-import { snapshots, watches } from "../db/schema.js";
-import { LIMITS } from "../lib/config.js";
-import { track } from "../lib/events.js";
-import { MONITOR_MODES } from "./observation.js";
+import { LIMITS } from "../config.js";
+import { MONITOR_MODES, type Store, type Watch, type WatchPatch } from "../db/store.js";
 
-export { MONITOR_MODES };
+const httpUrl = z
+  .string()
+  .trim()
+  .url("URL inválida")
+  .refine((u) => /^https?:\/\//i.test(u), "Use uma URL http ou https");
 
-const intervalSchema = z
+const interval = z
   .number()
   .int()
-  .min(LIMITS.minIntervalMinutes, `Intervalo mínimo: ${LIMITS.minIntervalMinutes} min`);
+  .min(LIMITS.minIntervalMinutes, `O intervalo mínimo é ${LIMITS.minIntervalMinutes} min`)
+  .max(7 * 24 * 60, "O intervalo máximo é 7 dias");
 
-export const createWatchSchema = z
-  .object({
-    url: z.string().url(),
-    cssSelector: z.string().min(1).max(500).optional().nullable(),
-    monitorMode: z.enum(MONITOR_MODES).default("text_changed"),
-    targetText: z.string().min(2).max(2000),
-    intervalMinutes: intervalSchema.default(
-      Math.max(LIMITS.defaultIntervalMinutes, LIMITS.minIntervalMinutes)
-    ),
-    webhookUrl: z.string().url().optional().nullable(),
-    notifyEmail: z.boolean().optional().default(true),
-    isActive: z.boolean().optional().default(true),
-  })
-  .refine((v) => v.notifyEmail !== false || Boolean(v.webhookUrl), {
-    message: "Informe e-mail (padrão) ou um webhook",
-  });
+const optionalUrl = z
+  .union([httpUrl, z.literal(""), z.null()])
+  .optional()
+  .transform((v) => (v ? v : v === undefined ? undefined : null));
+
+const selector = z
+  .union([z.string().trim().max(1000), z.null()])
+  .optional()
+  .transform((v) => (v === undefined ? undefined : v ? v : null));
+
+export const createWatchSchema = z.object({
+  url: httpUrl,
+  label: z.string().trim().max(200).optional(),
+  cssSelector: selector,
+  monitorMode: z.enum(MONITOR_MODES).default("text_changed"),
+  targetText: z.string().trim().min(2, "O trecho precisa de pelo menos 2 caracteres").max(2000),
+  intervalMinutes: interval.default(LIMITS.defaultIntervalMinutes),
+  webhookUrl: optionalUrl,
+  isActive: z.boolean().default(true),
+});
 
 export const updateWatchSchema = z.object({
-  url: z.string().url().optional(),
-  cssSelector: z.string().min(1).max(500).nullable().optional(),
+  url: httpUrl.optional(),
+  label: z.string().trim().min(1).max(200).optional(),
+  cssSelector: selector,
   monitorMode: z.enum(MONITOR_MODES).optional(),
-  targetText: z.string().min(2).max(2000).optional(),
-  intervalMinutes: intervalSchema.optional(),
-  webhookUrl: z.string().url().nullable().optional(),
-  notifyEmail: z.boolean().optional(),
+  targetText: z.string().trim().min(2).max(2000).optional(),
+  intervalMinutes: interval.optional(),
+  webhookUrl: optionalUrl,
   isActive: z.boolean().optional(),
 });
 
-export async function createWatch(userId: string, input: z.infer<typeof createWatchSchema>) {
-  const [{ value: existing }] = await db
-    .select({ value: count() })
-    .from(watches)
-    .where(eq(watches.userId, userId));
-
-  if (Number(existing) >= LIMITS.maxWatchesPerUser) {
-    throw new WatchLimitError(`Limite de ${LIMITS.maxWatchesPerUser} alertas por usuário`);
+/** "vagas.empresa.com/carreiras" from a URL, used when the page gave no title. */
+export function defaultLabel(url: string): string {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/$/, "");
+    return `${u.hostname.replace(/^www\./, "")}${path}`.slice(0, 120);
+  } catch {
+    return url.slice(0, 120);
   }
+}
 
-  const [row] = await db
-    .insert(watches)
-    .values({
-      userId,
+export function createWatch(store: Store, raw: unknown, now = new Date()): Watch {
+  const input = createWatchSchema.parse(raw);
+  return store.insertWatch(
+    {
+      label: input.label || defaultLabel(input.url),
       url: input.url,
       cssSelector: input.cssSelector ?? null,
       monitorMode: input.monitorMode,
-      targetText: input.targetText.trim(),
+      targetText: input.targetText,
       intervalMinutes: input.intervalMinutes,
       webhookUrl: input.webhookUrl ?? null,
-      notifyEmail: input.notifyEmail ?? true,
-      isActive: input.isActive ?? true,
-      nextCheckAt: new Date(),
-    })
-    .returning();
-
-  await track({
-    name: "watch_created",
-    userId,
-    props: {
-      watchId: row.id,
-      url: row.url,
-      monitorMode: row.monitorMode,
+      isActive: input.isActive,
     },
-  });
-
-  return row;
+    now
+  );
 }
 
-export async function updateWatch(
-  userId: string,
-  watchId: string,
-  input: z.infer<typeof updateWatchSchema>
-) {
-  // Changing what is observed invalidates the old snapshots: start a new baseline.
+/**
+ * Changing what is observed (url, selector, text or mode) invalidates the
+ * old snapshots: the next check starts a new baseline, right away.
+ * Resuming a paused watch also checks right away.
+ */
+export function updateWatch(store: Store, id: number, raw: unknown, now = new Date()): Watch | null {
+  const input = updateWatchSchema.parse(raw);
+  const existing = store.getWatch(id);
+  if (!existing) return null;
+
   const retarget =
-    input.url !== undefined ||
-    input.cssSelector !== undefined ||
-    input.monitorMode !== undefined ||
-    input.targetText !== undefined;
+    (input.url !== undefined && input.url !== existing.url) ||
+    (input.cssSelector !== undefined && input.cssSelector !== existing.cssSelector) ||
+    (input.monitorMode !== undefined && input.monitorMode !== existing.monitorMode) ||
+    (input.targetText !== undefined && input.targetText !== existing.targetText);
+  const resumed = input.isActive === true && !existing.isActive;
 
-  const [row] = await db
-    .update(watches)
-    .set({
-      ...(retarget ? { nextCheckAt: new Date(), lastStatus: "ok", lastError: null } : {}),
-      ...(input.url !== undefined ? { url: input.url } : {}),
-      ...(input.cssSelector !== undefined ? { cssSelector: input.cssSelector } : {}),
-      ...(input.monitorMode !== undefined ? { monitorMode: input.monitorMode } : {}),
-      ...(input.targetText !== undefined ? { targetText: input.targetText.trim() } : {}),
-      ...(input.intervalMinutes !== undefined ? { intervalMinutes: input.intervalMinutes } : {}),
-      ...(input.webhookUrl !== undefined ? { webhookUrl: input.webhookUrl } : {}),
-      ...(input.notifyEmail !== undefined ? { notifyEmail: input.notifyEmail } : {}),
-      ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-    })
-    .where(and(eq(watches.id, watchId), eq(watches.userId, userId)))
-    .returning();
-
-  if (!row) throw new NotFoundError("Watch not found");
+  const patch: WatchPatch = { ...input };
   if (retarget) {
-    await db.delete(snapshots).where(eq(snapshots.watchId, row.id));
+    Object.assign(patch, { lastStatus: "pending", lastError: null, lastPreview: null, consecutiveErrors: 0 });
   }
-  return row;
-}
+  if (retarget || resumed) patch.nextCheckAt = now.toISOString();
 
-export async function deleteWatch(userId: string, watchId: string) {
-  const [row] = await db
-    .delete(watches)
-    .where(and(eq(watches.id, watchId), eq(watches.userId, userId)))
-    .returning();
-  if (!row) throw new NotFoundError("Watch not found");
-  return row;
-}
-
-export class WatchLimitError extends Error {
-  status = 400;
-  constructor(message: string) {
-    super(message);
-    this.name = "WatchLimitError";
-  }
-}
-
-export class NotFoundError extends Error {
-  status = 404;
-  constructor(message: string) {
-    super(message);
-    this.name = "NotFoundError";
-  }
-}
-
-export class RateLimitError extends Error {
-  status = 429;
-  constructor(message: string) {
-    super(message);
-    this.name = "RateLimitError";
-  }
+  return store.transaction(() => {
+    if (retarget) store.deleteSnapshots(id);
+    return store.updateWatch(id, patch);
+  });
 }

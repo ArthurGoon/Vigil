@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
 import * as cheerio from "cheerio";
-import { LIMITS } from "./config.js";
+import { LIMITS } from "../config.js";
 
 export type FetchResult = {
   html: string;
   httpStatus: number;
-  bytes: number;
+  finalUrl: string;
 };
 
 export class SelectorMissError extends Error {
   constructor(selector: string) {
-    super(`CSS selector matched nothing: ${selector}`);
+    super(`O seletor não encontrou nada na página: ${selector}`);
     this.name = "SelectorMissError";
   }
 }
@@ -18,12 +18,22 @@ export class SelectorMissError extends Error {
 /** Trims every line and drops blank lines, so indentation and markup nesting never count as a change. */
 export function normalizeText(input: string): string {
   return input
-    .replace(/\u00a0/g, " ")
+    .replace(/ /g, " ")
+    .replace(/[​-‍﻿]/g, "")
     .split("\n")
     .map((line) => line.replace(/[ \t\r\f\v]+/g, " ").trim())
     .join("\n")
     .replace(/\n{2,}/g, "\n")
     .trim();
+}
+
+/**
+ * Comparison form of a text: one line, single spaces, lower case. The browser
+ * (innerText) and cheerio break lines in different places, so matching and
+ * hashing must not depend on where the line breaks fall.
+ */
+export function foldText(input: string): string {
+  return normalizeText(input).replace(/\s+/g, " ").toLowerCase();
 }
 
 const BLOCK_TAGS =
@@ -33,85 +43,132 @@ export function hashText(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-export function extractFromHtml(html: string, cssSelector?: string | null): string {
+type Root = ReturnType<typeof cheerio.load>;
+
+/** Loads the HTML with the same cleanup used everywhere: no scripts or chrome, blocks separated by newlines. */
+export function loadClean(html: string, opts: { keepChrome?: boolean } = {}): Root {
   const $ = cheerio.load(html);
-  $("script, style, noscript, svg, iframe, nav, footer, header").remove();
+  $("script, style, noscript, template, svg, iframe").remove();
+  if (!opts.keepChrome) $("nav, footer, header").remove();
   // Minified HTML has no whitespace between blocks: "<li>A</li><li>B</li>" would read "AB".
   $("br").replaceWith("\n");
   $(BLOCK_TAGS).after("\n");
-
-  let raw = "";
-  if (cssSelector) {
-    const nodes = $(cssSelector);
-    if (nodes.length === 0) {
-      throw new SelectorMissError(cssSelector);
-    }
-    raw = nodes
-      .map((_, el) => {
-        const node = $(el);
-        if (node.is("img")) {
-          const alt = node.attr("alt") || "";
-          const src = node.attr("src") || node.attr("data-src") || "";
-          return alt || (src ? `IMG:${src}` : "");
-        }
-        const text = node.text();
-        if (text.trim()) return text;
-        const nestedImg = node.find("img").first();
-        if (nestedImg.length) {
-          const alt = nestedImg.attr("alt") || "";
-          const src = nestedImg.attr("src") || nestedImg.attr("data-src") || "";
-          return alt || (src ? `IMG:${src}` : "");
-        }
-        return text;
-      })
-      .get()
-      .join("\n");
-  } else {
-    raw = $("body").text() || $.root().text();
-  }
-
-  const normalized = normalizeText(raw);
-  if (!normalized) {
-    throw new Error("Extracted content is empty (page may be JS-only or selector wrong)");
-  }
-  return normalized.slice(0, LIMITS.maxTextChars);
+  return $;
 }
 
-export async function fetchPage(url: string): Promise<FetchResult> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LIMITS.fetchTimeoutMs);
+function imageText($: Root, el: Parameters<Root>[0]): string {
+  const node = $(el);
+  const img = node.is("img") ? node : node.find("img").first();
+  if (!img.length) return "";
+  const alt = img.attr("alt") || "";
+  const src = img.attr("src") || img.attr("data-src") || "";
+  return alt || (src ? `IMG:${src}` : "");
+}
 
+/** Text of the elements matched by a selector, or null if it matches nothing. */
+export function selectText($: Root, cssSelector: string): { text: string; count: number } | null {
+  let nodes;
   try {
-    const response = await fetch(url, {
-      signal: controller.signal,
+    nodes = $(cssSelector);
+  } catch {
+    return null; // selector cheerio cannot parse
+  }
+  if (nodes.length === 0) return null;
+  const raw = nodes
+    .map((_, el) => {
+      const text = $(el).text();
+      return text.trim() ? text : imageText($, el);
+    })
+    .get()
+    .join("\n");
+  return { text: normalizeText(raw), count: nodes.length };
+}
+
+/**
+ * Text the checks compare. With a selector, only that element. Without one,
+ * the whole body; header, nav and footer are dropped unless `keepChrome`
+ * (presence checks keep them, a text can appear anywhere).
+ */
+export function extractFromHtml(
+  html: string,
+  cssSelector?: string | null,
+  opts: { keepChrome?: boolean } = {}
+): string {
+  let text: string;
+  if (cssSelector) {
+    // The selector was taken from the live page, which still has its header and nav.
+    const found = selectText(loadClean(html, { keepChrome: true }), cssSelector);
+    if (!found) throw new SelectorMissError(cssSelector);
+    text = found.text;
+  } else {
+    const $ = loadClean(html, opts);
+    text = normalizeText($("body").text() || $.root().text());
+  }
+  if (!text) {
+    throw new Error("A página veio sem texto nesse ponto (pode depender de JavaScript)");
+  }
+  return text.slice(0, LIMITS.maxTextChars);
+}
+
+export function pageTitle(html: string): string {
+  const $ = cheerio.load(html);
+  const title = $("meta[property='og:title']").attr("content") || $("title").first().text() || "";
+  return normalizeText(title).replace(/\s+/g, " ").slice(0, 200);
+}
+
+function charsetOf(contentType: string | null, head: Buffer): string {
+  const fromHeader = /charset=["']?([\w-]+)/i.exec(contentType ?? "")?.[1];
+  if (fromHeader) return fromHeader;
+  const sniff = head.subarray(0, 2048).toString("latin1");
+  return /<meta[^>]+charset=["']?([\w-]+)/i.exec(sniff)?.[1] ?? "utf-8";
+}
+
+function decode(buf: Buffer, charset: string): string {
+  try {
+    return new TextDecoder(charset).decode(buf);
+  } catch {
+    return buf.toString("utf8");
+  }
+}
+
+export const USER_AGENT =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 Vigil/1.0 (+https://github.com/ArthurGoon/Vigil)";
+
+export async function fetchPage(url: string): Promise<FetchResult> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      signal: AbortSignal.timeout(LIMITS.fetchTimeoutMs),
       headers: {
-        "User-Agent": "VigilBot/0.1 (+https://github.com/ArthurGoon/Vigil)",
-        Accept: "text/html,application/xhtml+xml",
+        "User-Agent": USER_AGENT,
+        Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
       },
       redirect: "follow",
     });
-
-    // A 404/500 page would be compared as if it were the real content.
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ao buscar a página`);
-    }
-
-    const declared = Number(response.headers.get("content-length") ?? 0);
-    if (declared > LIMITS.maxHtmlBytes) {
-      throw new Error(`HTML exceeds ${LIMITS.maxHtmlBytes} bytes`);
-    }
-
-    const buf = Buffer.from(await response.arrayBuffer());
-    if (buf.byteLength > LIMITS.maxHtmlBytes) {
-      throw new Error(`HTML exceeds ${LIMITS.maxHtmlBytes} bytes`);
-    }
-
-    return {
-      html: buf.toString("utf8"),
-      httpStatus: response.status,
-      bytes: buf.byteLength,
-    };
-  } finally {
-    clearTimeout(timer);
+  } catch (err) {
+    const cause = err instanceof Error ? err.name : "";
+    if (cause === "TimeoutError") throw new Error("A página demorou demais para responder");
+    throw new Error("Não consegui acessar a página");
   }
+
+  // A 404/500 page would be compared as if it were the real content.
+  if (!response.ok) {
+    throw new Error(`A página respondeu HTTP ${response.status}`);
+  }
+
+  const declared = Number(response.headers.get("content-length") ?? 0);
+  if (declared > LIMITS.maxHtmlBytes) {
+    throw new Error("Página grande demais (limite de 3 MB)");
+  }
+  const buf = Buffer.from(await response.arrayBuffer());
+  if (buf.byteLength > LIMITS.maxHtmlBytes) {
+    throw new Error("Página grande demais (limite de 3 MB)");
+  }
+
+  return {
+    html: decode(buf, charsetOf(response.headers.get("content-type"), buf)),
+    httpStatus: response.status,
+    finalUrl: response.url || url,
+  };
 }

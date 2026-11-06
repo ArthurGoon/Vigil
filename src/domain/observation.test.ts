@@ -23,7 +23,7 @@ function simulate(watch: WatchTarget, pages: string[]) {
     if (!decision.unchanged) {
       latest = { contentHash: decision.observation.key, contentText: decision.snapshotPayload };
     }
-    return decision;
+    return { ...decision, notify: decision.change !== null };
   });
 }
 
@@ -55,8 +55,9 @@ describe("text_changed", () => {
   it("alerts with a diff when the selected element changes", () => {
     const [, second] = simulate(watch, [fixture, withJobs("Backend Engineer", "ML Engineer")]);
     assert.equal(second.notify, true);
-    assert.match(second.diffSummary ?? "", /-.*Data Analyst/);
-    assert.match(second.diffSummary ?? "", /\+.*ML Engineer/);
+    assert.match(second.change?.diff ?? "", /-.*Data Analyst/);
+    assert.match(second.change?.diff ?? "", /\+.*ML Engineer/);
+    assert.equal(second.change?.summary, "“Data Analyst” virou “ML Engineer”");
   });
 
   it("ignores changes outside the selector", () => {
@@ -73,7 +74,7 @@ describe("text_changed", () => {
 
   it("fails loudly when the selector disappears", () => {
     const gone = fixture.replace('id="job-list"', 'id="other"');
-    assert.throws(() => pageTextFor(watch, gone), /matched nothing/);
+    assert.throws(() => pageTextFor(watch, gone), /não encontrou nada/);
   });
 });
 
@@ -90,10 +91,18 @@ describe("text_changed without selector", () => {
     assert.equal(obs.present, true);
   });
 
-  it("alerts when the target text itself is gone", () => {
-    const [, second] = simulate(watch, [fixture, withJobs("Backend Engineer")]);
+  it("alerts once when the target text itself is gone", () => {
+    const gone = withJobs("Backend Engineer");
+    const [, second, third] = simulate(watch, [fixture, gone, gone]);
     assert.equal(second.notify, true);
-    assert.equal(second.observation.excerpt, "MISSING:Data Analyst");
+    assert.equal(second.observation.excerpt, "");
+    assert.equal(second.change?.summary, "O trecho não está mais na página");
+    assert.equal(third.unchanged, true);
+  });
+
+  it("finds the target even when line breaks fall elsewhere", () => {
+    const obs = buildObservation(watch, "Vagas: Data\nAnalyst (remoto)");
+    assert.equal(obs.present, true);
   });
 });
 
@@ -117,7 +126,8 @@ describe("text_appears", () => {
     );
     assert.equal(results[1].unchanged, true);
     assert.equal(results[3].unchanged, true);
-    assert.match(results[2].diffSummary ?? "", /apareceu/);
+    assert.equal(results[2].change?.kind, "appeared");
+    assert.equal(results[2].change?.summary, "Apareceu: “ML Engineer”");
   });
 
   it("does not alert when it disappears", () => {
@@ -141,7 +151,7 @@ describe("text_disappears", () => {
       results.map((r) => r.notify),
       [false, true]
     );
-    assert.match(results[1].diffSummary ?? "", /sumiu/);
+    assert.equal(results[1].change?.kind, "disappeared");
   });
 
   it("does not alert if the text only moved on the page", () => {
@@ -153,8 +163,12 @@ describe("text_disappears", () => {
 });
 
 describe("extractAround", () => {
-  it("marks a missing target", () => {
-    assert.equal(extractAround("hello world", "bye"), "MISSING:bye");
+  it("is empty for a missing target", () => {
+    assert.equal(extractAround("hello world", "bye"), "");
+  });
+
+  it("ignores case and spacing of the target", () => {
+    assert.equal(extractAround("preço: R$ 10,00 à vista", "r$10,00", 0), "R$ 10,00");
   });
 
   it("limits the window by radius", () => {

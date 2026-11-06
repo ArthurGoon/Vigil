@@ -3,8 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { summarizeDiff } from "../lib/diff.js";
-import { extractFromHtml, hashText, normalizeText } from "../lib/html.js";
+import { extractFromHtml, foldText, hashText, normalizeText } from "./html.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixture = readFileSync(join(__dirname, "../../fixtures/sample.html"), "utf8");
@@ -29,7 +28,25 @@ describe("extractFromHtml", () => {
   });
 
   it("throws when selector matches nothing", () => {
-    assert.throws(() => extractFromHtml(fixture, "#missing"), /matched nothing/);
+    assert.throws(() => extractFromHtml(fixture, "#missing"), /não encontrou nada/);
+  });
+});
+
+describe("foldText", () => {
+  it("does not care where the line breaks are", () => {
+    assert.equal(foldText("Data\n  Analyst"), foldText("data analyst"));
+  });
+});
+
+describe("extractFromHtml with a selector", () => {
+  it("can select inside header and nav, like the live page", () => {
+    const html = "<body><header><span id='badge'>3 novas</span></header><main>x</main></body>";
+    assert.equal(extractFromHtml(html, "#badge"), "3 novas");
+  });
+
+  it("uses the alt text of a selected image", () => {
+    const html = "<body><a id='banner'><img alt='Promoção de inverno' src='/b.png'></a></body>";
+    assert.equal(extractFromHtml(html, "#banner"), "Promoção de inverno");
   });
 });
 
@@ -39,28 +56,6 @@ describe("hashText", () => {
     const b = hashText("hello");
     assert.equal(a, b);
     assert.notEqual(hashText("hello"), hashText("hello!"));
-  });
-});
-
-describe("summarizeDiff", () => {
-  it("returns truncated patch for changes", () => {
-    const summary = summarizeDiff("line1\n", "line1\nline2\n");
-    assert.match(summary, /line2/);
-  });
-});
-
-describe("summarizeDiff format", () => {
-  it("keeps only the hunks, without file headers or newline noise", () => {
-    const summary = summarizeDiff("Backend Engineer\nData Analyst", "Backend Engineer\nML Engineer");
-    assert.match(summary, /^@@/);
-    assert.match(summary, /^-Data Analyst$/m);
-    assert.match(summary, /^\+ML Engineer$/m);
-    assert.doesNotMatch(summary, /No newline|\+\+\+ after/);
-  });
-
-  it("truncates long diffs", () => {
-    const summary = summarizeDiff("a\n", `${"b".repeat(5000)}\n`, 100);
-    assert.match(summary, /diff truncated/);
   });
 });
 
