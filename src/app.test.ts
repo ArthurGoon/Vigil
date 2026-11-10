@@ -58,6 +58,27 @@ beforeEach(() => {
 });
 
 describe("API: full cycle", () => {
+  it("creates its own baseline without claiming an older due watch", async () => {
+    const { call, store } = setup();
+    const older = store.insertWatch({
+      url: siteUrl, label: "Aguardando", cssSelector: null, targetText: "Data Analyst",
+      monitorMode: "text_changed", intervalMinutes: 60, webhookUrl: null, isActive: true,
+    }, new Date(0));
+    const created = await call("POST", "/api/watches", { url: siteUrl, targetText: "Backend Engineer" });
+    assert.equal(created.status, 201);
+    assert.equal(created.json.check?.status, "ok");
+    assert.ok(store.latestSnapshot(created.json.watch.id));
+    assert.equal(store.getWatch(older.id)?.nextCheckAt, older.nextCheckAt);
+  });
+
+  it("does not check a watch created paused", async () => {
+    const { call, store } = setup();
+    const created = await call("POST", "/api/watches", { url: siteUrl, targetText: "Data Analyst", isActive: false });
+    assert.equal(created.status, 201);
+    assert.equal(created.json.check, null);
+    assert.equal(store.latestSnapshot(created.json.watch.id), null);
+  });
+
   it("creates with a baseline, detects the change and lists it with a diff", async () => {
     const { call } = setup();
     const created = await call("POST", "/api/watches", {

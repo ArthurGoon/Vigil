@@ -1,0 +1,114 @@
+[
+  {
+    "name": "servidor inicia com SQLite temporário",
+    "ok": true
+  },
+  {
+    "name": "painel inicial explica instalação e criação de alertas",
+    "ok": true
+  },
+  {
+    "name": "primeira ação abre o editor com foco na página e opções avançadas recolhidas",
+    "ok": true
+  },
+  {
+    "name": "entrada funciona no celular sem rolagem horizontal",
+    "ok": true
+  },
+  {
+    "name": "extensão ativa a caneta na página",
+    "ok": true
+  },
+  {
+    "name": "caneta reconhece o preço e valida a leitura no servidor",
+    "ok": true
+  },
+  {
+    "name": "caneta salva com seletor e primeira leitura",
+    "ok": true
+  },
+  {
+    "name": "painel cria alerta: text_appears",
+    "ok": true
+  },
+  {
+    "name": "painel cria alerta: text_disappears",
+    "ok": true
+  },
+  {
+    "name": "primeira leitura não gera notificações",
+    "ok": true
+  },
+  {
+    "name": "mudança de preço aparece no histórico",
+    "ok": true
+  },
+  {
+    "name": "painel acompanha o modo escuro do sistema",
+    "ok": true
+  },
+  {
+    "name": "texto que apareceu gera alerta",
+    "ok": true
+  },
+  {
+    "name": "texto que sumiu gera alerta",
+    "ok": true
+  },
+  {
+    "name": "extensão avança o cursor das notificações",
+    "ok": true
+  },
+  {
+    "name": "popup lista os três alertas",
+    "ok": true
+  },
+  {
+    "name": "recarregar mantém os alertas salvos",
+    "ok": true
+  },
+  {
+    "name": "busca encontra um alerta pelo nome",
+    "ok": true
+  },
+  {
+    "name": "busca vazia orienta o próximo passo",
+    "ok": true
+  },
+  {
+    "name": "filtro mostra apenas o alerta pausado",
+    "ok": true
+  },
+  {
+    "name": "interface funciona em largura de celular",
+    "ok": true
+  },
+  {
+    "name": "navegação móvel abre os alertas sem perder o detalhe",
+    "ok": true
+  },
+  {
+    "name": "exclusão pede confirmação com foco em manter o alerta",
+    "ok": true
+  },
+  {
+    "name": "cancelar exclusão preserva o alerta e o histórico",
+    "ok": true
+  },
+  {
+    "name": "cancelar devolve o foco às opções do alerta",
+    "ok": true
+  },
+  {
+    "name": "confirmar exclusão remove somente o alerta escolhido",
+    "ok": true
+  },
+  {
+    "name": "HTTP 503 vira erro sem gerar mudança falsa",
+    "ok": true
+  },
+  {
+    "name": "não houve exceções JavaScript na interface",
+    "ok": true
+  }
+]

@@ -3,3 +3,11 @@ dist/
 data/
 *.log
 .DS_Store
+.env
+.env.*
+*.pem
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+releases/

@@ -14,7 +14,7 @@
           <path d="M5.5 17.5c-1.6-6.3 4-11.6 11.2-11.4 7 .2 11.6 4.6 10.4 10.4-1.2 6-7.6 9.4-13.6 8.6C8 24.4 4.4 20.6 6 15.2" stroke="var(--red)" stroke-width="2.6" stroke-linecap="round" />
           <circle cx="16.4" cy="15.6" r="3.4" fill="currentColor" />
         </svg>
-        <span>vigil</span>
+        <span>vigil</span><small class="brand-caption">Seu radar pessoal.</small>
       </a>
       <span id="conn" class="conn" hidden></span>
       <div class="spacer"></div>
@@ -30,18 +30,26 @@
 
     <div class="shell" id="shell">
       <aside class="sidebar" id="sidebar" hidden>
+        <button id="mobile-list-toggle" class="mobile-list-toggle" type="button" aria-expanded="false" aria-controls="watch-navigation">Meus alertas <span id="mobile-count"></span><span aria-hidden="true">⌄</span></button>
+        <nav id="watch-navigation" aria-label="Meus alertas">
         <div class="side-head">
-          <span>Alertas</span>
+          <span>Meu radar</span>
           <span id="count" class="count"></span>
         </div>
+        <p id="radar-summary" class="radar-summary"></p>
+        <label class="watch-search"><span class="sr-only">Buscar alertas</span><svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.5"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><input id="watch-search" type="search" placeholder="Buscar no seu radar" autocomplete="off" /></label>
+        <div class="list-filters" role="group" aria-label="Filtrar alertas"><button type="button" data-list-filter="all" aria-pressed="true">Todos</button><button type="button" data-list-filter="news" aria-pressed="false">Novidades</button><button type="button" data-list-filter="paused" aria-pressed="false">Pausados</button></div>
         <ul id="list" class="list"></ul>
+        <p id="list-empty" class="list-empty" hidden>Nenhum alerta encontrado. Tente outro nome ou filtro.</p>
+        <p class="sidebar-note">No seu computador.<br>No seu ritmo.</p>
+        </nav>
       </aside>
       <main id="main" class="main">
         <div class="loading" aria-label="Carregando"><span></span><span></span><span></span></div>
       </main>
     </div>
 
-    <dialog id="editor" class="dialog">
+    <dialog id="editor" class="dialog" aria-labelledby="editor-title">
       <form id="editor-form" method="dialog" novalidate>
         <header class="dialog-head">
           <h2 id="editor-title">Novo alerta</h2>
@@ -50,13 +58,13 @@
           </button>
         </header>
         <div class="dialog-body">
-          <p class="dialog-tip" id="editor-tip">O jeito mais fácil é pela extensão: abra a página e circule o trecho. Aqui você cria ou ajusta à mão.</p>
+          <p class="dialog-tip" id="editor-tip">Escolha o que importa. O Vigil faz a primeira leitura agora e acompanha as próximas mudanças.</p>
           <label class="field">
             <span class="label">Endereço da página</span>
             <input name="url" type="url" placeholder="https://empresa.com/vagas" required />
           </label>
           <label class="field">
-            <span class="label">Nome</span>
+            <span class="label">Um nome para reconhecer depois <em>opcional</em></span>
             <input name="label" type="text" placeholder="Vagas da ACME" maxlength="200" />
           </label>
           <div class="field">
@@ -72,7 +80,7 @@
             <textarea name="targetText" rows="2" placeholder="Data Analyst" required></textarea>
             <span class="help" id="target-help"></span>
           </label>
-          <div class="grid-2">
+          <div>
             <label class="field">
               <span class="label">Checar a cada</span>
               <select name="intervalMinutes">
@@ -84,25 +92,31 @@
                 <option value="1440">1 dia</option>
               </select>
             </label>
-            <label class="field" id="selector-field">
-              <span class="label">Seletor CSS <em>opcional</em></span>
-              <input name="cssSelector" type="text" placeholder="#vagas li" spellcheck="false" class="mono" />
-            </label>
           </div>
           <details class="advanced">
-            <summary>Webhook</summary>
+            <summary>Ajustes avançados <span>opcional</span></summary>
+            <label class="field" id="selector-field">
+              <span class="label">Restringir a um elemento (seletor CSS)</span>
+              <input name="cssSelector" type="text" placeholder="#vagas li" spellcheck="false" class="mono" />
+              <span class="help">A extensão encontra esse seletor quando você circula o trecho.</span>
+            </label>
             <label class="field">
-              <span class="label">URL que recebe um POST com a mudança <em>opcional</em></span>
+              <span class="label">Enviar mudanças para um webhook</span>
               <input name="webhookUrl" type="url" placeholder="https://..." />
             </label>
           </details>
-          <p class="form-error" id="editor-error" hidden></p>
+          <p class="form-error" id="editor-error" role="alert" hidden></p>
         </div>
         <footer class="dialog-foot">
           <button type="button" class="btn ghost" data-close>Cancelar</button>
           <button type="submit" class="btn primary" id="editor-submit">Criar alerta</button>
         </footer>
       </form>
+    </dialog>
+
+    <dialog id="delete-dialog" class="dialog delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description">
+      <div class="dialog-body"><div class="delete-symbol" aria-hidden="true">−</div><h2 id="delete-title">Tirar do seu radar?</h2><p id="delete-description"></p><p class="help">O alerta e seu histórico serão excluídos.</p><p id="delete-error" class="form-error" role="alert" hidden></p></div>
+      <div class="dialog-foot"><button id="delete-cancel" class="btn" type="button" autofocus>Manter alerta</button><button id="delete-confirm" class="btn destructive" type="button">Excluir alerta</button></div>
     </dialog>
 
     <div id="toasts" class="toasts" aria-live="polite"></div>

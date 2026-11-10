@@ -112,9 +112,9 @@ export function createApp({ store, checker, pages, webDir = join(ROOT_DIR, "web"
   /** Creates the watch and runs the first check right away, so the caller sees the baseline (or the error). */
   app.post("/api/watches", async (c) => {
     const watch = createWatch(store, await body(c));
-    const claimed = store.claimDue(1, LIMITS.claimLeaseSeconds, new Date(), checker.busyIds())
-      .find((w) => w.id === watch.id);
-    const result = claimed ? await checker.run(claimed) : null;
+    // Checker marks this id busy synchronously, before yielding to the fetch.
+    // Claiming the next due watch here could lease an unrelated older alert.
+    const result = watch.isActive ? await checker.run(watch) : null;
     return c.json({ watch: withBusy(store.getWatch(watch.id) ?? watch), check: result }, 201);
   });
 

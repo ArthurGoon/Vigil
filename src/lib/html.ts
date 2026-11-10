@@ -149,7 +149,7 @@ function decode(buf: Buffer, charset: string): string {
 }
 
 export const USER_AGENT =
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 Vigil/1.0 (+https://github.com/ArthurGoon/Vigil)";
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 Vigil/2.0 (+https://github.com/ArthurGoon/Vigil)";
 
 /**
  * HTTP/2 when the site offers it. Some sites answer HTTP/1.1 clients that do

@@ -19,6 +19,11 @@ export class AlreadyCheckingError extends Error {
   }
 }
 
+function sameTarget(current: Watch | null, checked: Watch): current is Watch {
+  return current !== null && current.url === checked.url && current.cssSelector === checked.cssSelector &&
+    current.targetText === checked.targetText && current.monitorMode === checked.monitorMode;
+}
+
 /**
  * Runs checks and guarantees that one watch is never checked twice at the
  * same time: the scheduler and the "checar agora" button go through the same
@@ -63,13 +68,16 @@ export class Checker {
       decision = decideCheck(watch, pageTextFor(watch, page.html), this.store.latestSnapshot(watch.id));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Falha no check";
-      const errors = watch.consecutiveErrors + 1;
+      // Edits made while fetch was pending also take precedence on failure.
+      const current = this.store.getWatch(watch.id);
+      if (!sameTarget(current, watch)) return { status: "error", preview: "", error: message, change: null };
+      const errors = current.consecutiveErrors + 1;
       this.store.updateWatch(watch.id, {
         lastCheckedAt: nowIso,
         lastStatus: "error",
         lastError: message,
         consecutiveErrors: errors,
-        nextCheckAt: nextCheckAt(now, watch.intervalMinutes, errors).toISOString(),
+        nextCheckAt: nextCheckAt(now, current.intervalMinutes, errors).toISOString(),
         ...manualPatch,
       });
       return { status: "error", preview: "", error: message, change: null };
@@ -78,8 +86,7 @@ export class Checker {
     const { observation } = decision;
     // The watch may have been deleted or retargeted while the page was loading.
     const current = this.store.getWatch(watch.id);
-    if (!current || current.url !== watch.url || current.cssSelector !== watch.cssSelector ||
-        current.targetText !== watch.targetText || current.monitorMode !== watch.monitorMode) {
+    if (!sameTarget(current, watch)) {
       return { status: "ok", preview: observation.preview, error: null, change: null };
     }
 

@@ -425,7 +425,7 @@
       font-family: "Vigil Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       --bg: #ffffff; --bg-2: #f6f5f2; --bg-3: #efede8; --line: #e7e4dd; --line-2: #d9d5cc;
       --text: #18191b; --text-2: #5c5e63; --text-3: #8d8f94;
-      --red: #e5372b; --red-ink: #b8261c; --red-soft: #fdeceb;
+      --red: #c6382c; --red-ink: #b8261c; --red-soft: #fdeceb;
       --ok: #16794a; --ok-soft: #e6f4ec; --warn: #9a5b06; --warn-soft: #fcf1df;
       --shadow: 0 1px 2px rgba(20,20,20,.06), 0 12px 32px -8px rgba(20,20,20,.22), 0 0 0 1px rgba(20,20,20,.06);
       color: var(--text); font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
@@ -451,9 +451,11 @@
       padding: 3px 8px; border-radius: 6px 6px 6px 0; white-space: nowrap; }
     .hl.saved .tag { background: var(--ok); }
     .hl.below .tag { top: auto; bottom: -24px; border-radius: 0 6px 6px 6px; }
-    .card { position: fixed; top: 16px; right: 16px; width: 360px; max-height: calc(100vh - 32px); overflow: auto; pointer-events: auto;
-      background: var(--bg); border-radius: 14px; box-shadow: var(--shadow); animation: pop .2s cubic-bezier(.2,.9,.3,1.2); }
+    .card { position: fixed; top: 16px; right: 16px; width: min(360px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; pointer-events: auto;
+      background: var(--bg); border-radius: 18px; box-shadow: var(--shadow); animation: pop .2s cubic-bezier(.2,.9,.3,1.2); }
     @media (max-width: 720px) { .card { top: auto; bottom: 12px; left: 12px !important; right: 12px !important; width: auto; } }
+    :focus-visible { outline: 3px solid var(--red); outline-offset: 3px; }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
     .head { display: flex; align-items: center; gap: 10px; padding: 14px 14px 0 16px; }
     .head .title { font-weight: 650; font-size: 14px; letter-spacing: -.01em; flex: 1; }
     .icon-btn { all: unset; cursor: pointer; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--text-3); }

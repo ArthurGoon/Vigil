@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Vigil",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Circule um trecho de qualquer página e seja avisado quando ele mudar, aparecer ou sumir.",
   "icons": {
     "16": "icons/16.png",
@@ -9,8 +9,18 @@
     "48": "icons/48.png",
     "128": "icons/128.png"
   },
-  "permissions": ["storage", "scripting", "activeTab", "notifications", "alarms", "contextMenus"],
-  "host_permissions": ["http://*/*", "https://*/*"],
+  "permissions": [
+    "storage",
+    "scripting",
+    "activeTab",
+    "notifications",
+    "alarms",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -25,14 +35,21 @@
   },
   "commands": {
     "start-pen": {
-      "suggested_key": { "default": "Alt+Shift+V" },
+      "suggested_key": {
+        "default": "Alt+Shift+V"
+      },
       "description": "Ligar a caneta na aba atual"
     }
   },
   "web_accessible_resources": [
     {
-      "resources": ["fonts/inter.woff2"],
-      "matches": ["http://*/*", "https://*/*"]
+      "resources": [
+        "fonts/inter.woff2"
+      ],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ]
     }
   ]
 }

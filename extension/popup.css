@@ -13,8 +13,8 @@
   --line-2: #d9d5cc;
   --text: #18191b;
   --text-2: #5c5e63;
-  --text-3: #8d8f94;
-  --red: #e5372b;
+  --text-3: #71747a;
+  --red: #c6382c;
   --red-ink: #b8261c;
   --red-soft: #fdeceb;
   --ok: #16794a;
@@ -453,3 +453,24 @@ main {
     transform: translateY(6px);
   }
 }
+
+/* A small, usable radar */
+:focus-visible { outline: 3px solid color-mix(in srgb, var(--red) 50%, transparent); outline-offset: 2px; }
+.top { padding: 17px 14px 14px 18px; }
+.brand { font-size: 21px; }
+.pen { padding: 0 18px 18px; }
+.pen-btn { min-height: 46px; border-radius: 12px; }
+.pen-note { font-size: 10px; }
+.section-title { padding: 15px 18px 8px; font-size: 11px; }
+.list { padding: 0 10px 12px; }
+.item { padding: 12px 9px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 7px; align-items: flex-start; }
+.item > .dot { margin-top: 5px; }
+.item-title { font-size: 12px; }
+.item-meta { font-size: 10px; margin-top: 3px; }
+.actions { opacity: 1; }
+.actions .icon-btn { width: 27px; height: 31px; }
+.foot { font-size: 10px; padding: 12px 18px; }
+.foot .link { font-size: 10px; }
+.empty, .offline { padding: 28px 24px; }
+.empty p, .offline p { font-size: 12px; line-height: 1.75; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

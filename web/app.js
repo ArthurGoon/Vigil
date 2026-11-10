@@ -117,6 +117,7 @@ function host(url) {
 }
 
 function toast(text) {
+  document.querySelectorAll("#toasts .toast").forEach((t) => t.remove());
   const t = el("div", { class: "toast", role: "status" }, text);
   $("#toasts").append(t);
   setTimeout(() => t.remove(), 3200);
@@ -129,6 +130,8 @@ let online = true;
 let loaded = false;
 const busy = new Set();
 let detailKey = "";
+let listFilter = "all";
+let searchText = "";
 
 function setOnline(value) {
   if (online === value) return;
@@ -163,15 +166,24 @@ function dotClass(w) {
 
 function renderList() {
   const current = route();
+  const active = watches.filter((w) => w.isActive).length;
+  const news = watches.filter((w) => w.unseenChanges > 0).length;
+  $("#radar-summary").textContent = `${active} ${active === 1 ? "ativo" : "ativos"}${news ? ` · ${news} com novidade` : " · tudo em um lugar"}`;
   $("#count").textContent = watches.length ? String(watches.length) : "";
+  $("#mobile-count").textContent = String(watches.length);
+  const filtered = watches.filter((w) =>
+    (listFilter === "all" || (listFilter === "news" ? w.unseenChanges > 0 : !w.isActive)) &&
+    `${w.label} ${w.url}`.toLocaleLowerCase("pt-BR").includes(searchText.toLocaleLowerCase("pt-BR")));
+  $("#list-empty").hidden = filtered.length > 0;
+  document.querySelectorAll("[data-list-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.listFilter === listFilter)));
   $("#list").replaceChildren(
-    ...watches.map((w) => {
+    ...filtered.map((w) => {
       let meta;
       if (!w.isActive) meta = el("span", { class: "item-meta" }, `Pausado · ${host(w.url)}`);
       else if (w.lastStatus === "error") meta = el("span", { class: "item-meta err" }, `Erro: ${w.lastError}`);
       else meta = el("span", { class: "item-meta" }, `${host(w.url)} · quando ${MODE[w.monitorMode].short} · ${w.checking || busy.has(w.id) ? "checando..." : w.lastCheckedAt ? ago(w.lastCheckedAt) : "esperando 1ª leitura"}`);
       return el("li", {},
-        el("a", { class: `item${w.id === current ? " active" : ""}`, href: `#/w/${w.id}` },
+        el("a", { class: `item${w.id === current ? " active" : ""}`, href: `#/w/${w.id}`, "aria-current": w.id === current ? "page" : null, onclick: closeMobileList },
           el("span", { class: `dot ${dotClass(w)}` }),
           el("span", { class: "item-title", title: w.label }, w.label),
           w.unseenChanges > 0 ? el("em", { class: "pill" }, w.unseenChanges > 1 ? `${w.unseenChanges} novas` : "nova") : el("span"),
@@ -189,18 +201,21 @@ function renderWelcome() {
   $("#sidebar").hidden = true;
   $("#main").replaceChildren(
     el("div", { class: "welcome" },
-      el("div", { class: "welcome-mark", html: ICON.logo }),
-      el("h1", {}, "Vigie qualquer pedaço da web"),
-      el("p", { class: "lead" }, "Circule um trecho de uma página e o Vigil avisa quando ele mudar, aparecer ou sumir. Tudo roda aqui no seu computador."),
-      el("div", { class: "steps" },
-        step(1, "Instale a extensão", el("span", {}, "Em ", el("code", {}, "chrome://extensions"), ", ligue o modo do desenvolvedor e carregue a pasta ", el("code", {}, "extension/"), ".")),
-        step(2, "Circule o trecho", el("span", {}, "Em qualquer site, clique no ícone do Vigil (ou ", el("code", {}, "Alt+Shift+V"), ") e circule o que importa.")),
-        step(3, "Receba o aviso", el("span", {}, "Notificação no Chrome quando mudar, e aqui o antes e depois de cada mudança."))),
-      el("p", { class: "welcome-alt" }, "Prefere digitar? ", el("button", { class: "linklike", onclick: () => openEditor() }, "Crie um alerta à mão"))));
-}
-
-function step(n, title, body) {
-  return el("div", { class: "card step" }, el("div", { class: "step-n" }, String(n)), el("h3", {}, title), el("p", {}, body));
+      el("div", { class: "welcome-hero" },
+        el("div", { class: "welcome-copy" },
+          el("p", { class: "eyebrow" }, "MENOS ABAS ABERTAS. MAIS TRANQUILIDADE."),
+          el("h1", {}, "O que importa muda.", el("br"), el("span", {}, "Você fica sabendo.")),
+          el("p", { class: "lead" }, "Um preço, uma vaga, aquele aviso que você não quer perder. Escolha um trecho e deixe o Vigil acompanhar por você."),
+          el("div", { class: "welcome-actions" }, el("button", { class: "btn primary welcome-cta", onclick: () => openEditor() }, el("span", { html: ICON.plus }), "Criar meu primeiro alerta")),
+          el("p", { class: "local-note" }, el("span", { class: "local-dot" }), "No seu computador. Sem criar conta.")),
+        el("div", { class: "welcome-preview", html: `<div class="preview-caption"><span class="preview-live"></span>UM EXEMPLO DO SEU RADAR</div><div class="preview-window"><div class="preview-window-top"><span class="preview-favicon">↗</span><div><strong>O monitor que você quer</strong><small>loja de exemplo</small></div><span class="preview-tag">mudou</span></div><div class="preview-price"><span>Preço acompanhado</span><strong>R$ 1.799<span>,90</span></strong><small>Antes, R$ 1.899,90</small></div><div class="preview-change"><span>↓</span><div><strong>Uma mudança para você.</strong><small>O antes e depois, sem procurar de novo.</small></div></div></div><p class="preview-disclaimer">Exemplo ilustrativo · você escolhe o que acompanhar.</p>` })),
+      el("div", { class: "welcome-bottom" },
+        el("div", { class: "welcome-benefit" }, el("span", {}, "01"), el("div", {}, el("h3", {}, "Escolha o trecho"), el("p", {}, "Circule com a extensão ou cole o texto aqui."))),
+        el("div", { class: "welcome-benefit" }, el("span", {}, "02"), el("div", {}, el("h3", {}, "Defina o momento"), el("p", {}, "Quando mudar, aparecer ou sumir. Você decide."))),
+        el("div", { class: "welcome-benefit" }, el("span", {}, "03"), el("div", {}, el("h3", {}, "Veja o que mudou"), el("p", {}, "Avisos no Chrome e o histórico sempre à mão.")))),
+      el("details", { class: "install-guide" }, el("summary", {}, "Prefere circular o trecho na página?"),
+        el("p", {}, "Em ", el("code", {}, "chrome://extensions"), ", ative o modo do desenvolvedor e carregue a pasta ", el("code", {}, "extension/"), ". Depois, abra um site, clique no ícone do Vigil e circule o trecho. Atalho: ", el("code", {}, "Alt+Shift+V"), ".")),
+      el("p", { class: "welcome-alt" }, el("button", { class: "linklike", onclick: () => openEditor() }, "Crie um alerta à mão"), " · Mantenha o Vigil rodando para acompanhar as páginas.")));
 }
 
 async function renderDetail(id, { force = false } = {}) {
@@ -228,6 +243,7 @@ async function renderDetail(id, { force = false } = {}) {
 
   const head = el("div", { class: "detail-head" },
     el("div", { style: "min-width:0;flex:1" },
+      el("p", { class: "eyebrow" }, "NO SEU RADAR"),
       el("div", { class: "chips" }, statusChip, el("span", { class: "chip" }, MODE[w.monitorMode].chip), el("span", { class: "chip" }, `A cada ${every(w.intervalMinutes)}`)),
       el("h1", {}, w.label),
       el("a", { class: "url", href: w.url, target: "_blank", rel: "noreferrer" }, shortUrl(w.url), el("span", { html: ICON.out }))),
@@ -235,8 +251,11 @@ async function renderDetail(id, { force = false } = {}) {
       el("button", { class: "btn primary", disabled: isBusy || !w.isActive, onclick: () => checkNow(w) },
         el("span", { html: ICON.refresh, class: isBusy ? "spin" : "", style: "display:grid" }), isBusy ? "Checando..." : "Checar agora"),
       el("button", { class: "btn", onclick: () => togglePause(w) }, el("span", { html: w.isActive ? ICON.pause : ICON.play, style: "display:grid" }), w.isActive ? "Pausar" : "Retomar"),
-      el("button", { class: "btn", onclick: () => openEditor(w) }, el("span", { html: ICON.edit, style: "display:grid" }), "Editar"),
-      el("button", { class: "btn danger", "aria-label": "Excluir", title: "Excluir", onclick: () => remove(w) }, el("span", { html: ICON.trash, style: "display:grid" }))));
+      el("details", { class: "watch-menu" },
+        el("summary", { "aria-label": "Mais opções do alerta", title: "Mais opções" }, "···"),
+        el("div", { class: "watch-menu-items" },
+          el("button", { type: "button", onclick: () => openEditor(w) }, el("span", { html: ICON.edit }), "Editar alerta"),
+          el("button", { type: "button", class: "menu-delete", onclick: () => remove(w) }, el("span", { html: ICON.trash }), "Excluir alerta")))));
 
   const stats = el("div", { class: "stats" },
     stat("Última checagem", w.lastCheckedAt ? ago(w.lastCheckedAt) : "ainda não"),
@@ -251,7 +270,7 @@ async function renderDetail(id, { force = false } = {}) {
     : null;
 
   $("#main").replaceChildren(head, stats, banner || "", nowSection(w, current), historySection(w, changes),
-    el("p", { class: "meta-foot" }, `Criado ${when(w.createdAt)}.`));
+    el("p", { class: "meta-foot" }, `No seu radar desde ${when(w.createdAt)}. As checagens acontecem enquanto o Vigil está rodando.`));
 
   if (w.unseenChanges > 0) {
     setTimeout(async () => {
@@ -288,11 +307,10 @@ function nowSection(w, current) {
 
   return el("section", { class: "section" }, title,
     el("div", { class: "card now" },
-      el("div", { class: "now-text" }, current.excerpt || "O trecho não está na página agora."),
-      el("div", { class: "now-foot" },
-        w.cssSelector
-          ? el("span", {}, "Elemento ", el("code", {}, w.cssSelector))
-          : el("span", {}, "Achado pelo texto “", w.targetText.slice(0, 80), "”"))));
+      el("div", { class: `now-text${current.excerpt.length < 100 ? " short" : ""}` }, current.excerpt || "O trecho não está na página agora."),
+      el("details", { class: "now-foot" }, el("summary", {}, "O que está sendo acompanhado?"),
+        el("p", {}, w.cssSelector ? "As mudanças dentro do trecho selecionado na página." : `O texto em volta de “${w.targetText.slice(0, 80)}”.`),
+        w.cssSelector ? el("code", {}, w.cssSelector) : null)));
 }
 
 function historySection(w, changes) {
@@ -301,9 +319,9 @@ function historySection(w, changes) {
   if (!changes.length) {
     return el("section", { class: "section" }, head,
       el("div", { class: "empty-history" },
-        w.lastCheckedAt
-          ? `Nenhuma mudança ainda. O Vigil compara a cada ${every(w.intervalMinutes)} e avisa quando ${MODE[w.monitorMode].short}.`
-          : "Assim que a primeira leitura sair, as mudanças aparecem aqui."));
+        el("span", { class: "quiet-mark", html: ICON.yes, "aria-hidden": "true" }),
+        el("strong", {}, w.lastCheckedAt ? "Tudo tranquilo por aqui." : "Preparando sua primeira leitura."),
+        el("p", {}, w.lastCheckedAt ? `O Vigil acompanha a cada ${every(w.intervalMinutes)}. Quando ${MODE[w.monitorMode].short}, você vê o antes e depois aqui.` : "Assim que a página responder, o trecho fica salvo como referência.")));
   }
   return el("section", { class: "section" }, head, el("div", { class: "timeline" }, changes.map(changeCard)));
 }
@@ -380,16 +398,33 @@ async function togglePause(w) {
 }
 
 async function remove(w) {
-  if (!confirm(`Excluir "${w.label}"? O histórico de mudanças vai junto.`)) return;
+  document.querySelectorAll(".watch-menu[open]").forEach((m) => { m.open = false; });
+  document.querySelector(".watch-menu summary")?.focus();
+  pendingDelete = w;
+  $("#delete-description").textContent = `Você está excluindo “${w.label}”. Se quiser só uma pausa, use Pausar.`;
+  $("#delete-error").hidden = true;
+  $("#delete-dialog").showModal();
+}
+
+let pendingDelete = null;
+$("#delete-cancel").addEventListener("click", () => $("#delete-dialog").close());
+$("#delete-confirm").addEventListener("click", async (event) => {
+  if (!pendingDelete) return;
+  event.currentTarget.disabled = true;
   try {
-    await api(`/watches/${w.id}`, { method: "DELETE" });
+    await api(`/watches/${pendingDelete.id}`, { method: "DELETE" });
+    $("#delete-dialog").close();
+    pendingDelete = null;
     toast("Alerta excluído");
     location.hash = "#/";
   } catch (err) {
-    toast(err.message);
+    $("#delete-error").textContent = err.message;
+    $("#delete-error").hidden = false;
+  } finally {
+    $("#delete-confirm").disabled = false;
   }
   await refresh({ force: true });
-}
+});
 
 // Editor dialog
 
@@ -405,13 +440,15 @@ function setEditorMode(mode) {
   $("#target-label").textContent = mode === "text_appears" ? "Texto que deve aparecer" : mode === "text_disappears" ? "Texto que deve sumir" : "Texto do trecho";
   $("#target-help").textContent = presence
     ? "Procurado na página inteira, sem diferenciar maiúsculas."
-    : "Com seletor, o Vigil compara o elemento inteiro. Sem seletor, compara o texto em volta deste trecho.";
+    : "Copie o texto como aparece na página. Você será avisado quando esse trecho mudar.";
   $("#selector-field").hidden = presence;
 }
 
 function openEditor(w = null) {
+  document.querySelectorAll(".watch-menu[open]").forEach((m) => { m.open = false; });
   editing = w;
   form.reset();
+  form.querySelector("details").open = false;
   $("#editor-error").hidden = true;
   $("#editor-title").textContent = w ? "Editar alerta" : "Novo alerta";
   $("#editor-submit").textContent = w ? "Salvar" : "Criar alerta";
@@ -427,7 +464,7 @@ function openEditor(w = null) {
       sel.append(el("option", { value: String(w.intervalMinutes) }, every(w.intervalMinutes)));
     }
     sel.value = String(w.intervalMinutes);
-    form.querySelector("details").open = Boolean(w.webhookUrl);
+    form.querySelector("details").open = Boolean(w.webhookUrl || w.cssSelector);
   }
   setEditorMode(w ? w.monitorMode : "text_changed");
   dialog.showModal();
@@ -476,6 +513,16 @@ form.addEventListener("submit", async (e) => {
 });
 
 $("#new-watch").addEventListener("click", () => openEditor());
+$("#watch-search").addEventListener("input", (e) => { searchText = e.target.value.trim(); renderList(); });
+document.querySelectorAll("[data-list-filter]").forEach((b) => b.addEventListener("click", () => { listFilter = b.dataset.listFilter; renderList(); }));
+$("#mobile-list-toggle").addEventListener("click", () => {
+  const open = $("#sidebar").classList.toggle("nav-open");
+  $("#mobile-list-toggle").setAttribute("aria-expanded", String(open));
+});
+function closeMobileList() {
+  $("#sidebar").classList.remove("nav-open");
+  $("#mobile-list-toggle").setAttribute("aria-expanded", "false");
+}
 
 // Loop
 
@@ -513,5 +560,5 @@ window.addEventListener("hashchange", () => {
 
 refresh({ force: true });
 setInterval(() => {
-  if (!dialog.open) refresh();
+  if (!dialog.open && !$("#delete-dialog").open) refresh();
 }, 8000);

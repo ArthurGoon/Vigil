@@ -1,161 +1,151 @@
 # Vigil
 
-Monitor de trechos de página. Você marca um pedaço de texto (uma vaga, um preço, um aviso de edital) e escolhe quando quer ser avisado: quando ele **mudar**, quando **aparecer** ou quando **sumir**. Um worker checa a página no intervalo definido, compara com a última versão e registra o alerta. Comecei pensando em um serviço hospedado, mas a versão final roda inteira na sua máquina, sob demanda, sem nenhuma conta externa.
+[![CI](https://github.com/ArthurGoon/Vigil/actions/workflows/ci.yml/badge.svg)](https://github.com/ArthurGoon/Vigil/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ArthurGoon/Vigil)](https://github.com/ArthurGoon/Vigil/releases/latest)
+[![Licença MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-![Painel do Vigil com três alertas detectando mudança](docs/painel.jpg)
+Monitor local de trechos de páginas. Circule um preço, uma vaga ou um aviso com a extensão do Chrome e escolha quando quer ser avisado: quando **mudar**, **aparecer** ou **sumir**. O painel mostra a leitura atual e o histórico com antes/depois; a extensão avisa no Chrome. Busca e filtros ajudam a encontrar seus alertas, e no celular a lista se recolhe para dar espaço ao que mudou.
 
-*Painel rodando localmente: um alerta de cada modo apontando para uma cópia de `fixtures/sample.html` servida em localhost, depois de trocar "Data Analyst" por "ML Engineer".*
+Sem conta, chave de API, Docker ou banco externo. Um único processo Node serve o painel, agenda as checagens e guarda os dados em SQLite.
 
-## Arquitetura
+![Painel do Vigil com mudança de preço](docs/painel.png)
 
-```
- extensão Chrome (caneta)  ─┐
-                            ├─> API Hono ──> Postgres <── worker (SKIP LOCKED)
- painel web (web/)         ─┘     │                          │
-                                  └── check manual ──────────┴─> fetch + cheerio
-                                                                   │
-                                                  alerta: painel, console, e-mail*, webhook*
-```
+*Demonstração com dados fictícios de `fixtures/demo/produto.html`, servidos localmente. O teste ponta a ponta circula o preço com a extensão, troca R$ 1.899,90 por R$ 1.799,90 e confere o histórico.*
 
-- `src/api`: API HTTP (Hono). Também serve o front estático de `web/`.
-- `src/worker`: scheduler que pega os alertas vencidos com `FOR UPDATE SKIP LOCKED`.
-- `src/domain`: login, CRUD de alertas, check (`check.ts`) e a lógica pura de decisão (`observation.ts`, `schedule.ts`).
-- `src/lib`: extração de HTML, diff, notificação (e-mail via Resend ou console, webhook), eventos.
-- `src/db` + `drizzle/`: schema Drizzle e migrations SQL.
-- `sql/analytics_views.sql`: views de funil diário e tempo na página sobre a tabela `events`.
-- `extension/`: extensão Chrome MV3 com caneta e side panel.
+## Começar
 
-\* opcionais.
+Versão **2.0.0** · uso local, pessoal e portfólio. [Notas da versão](CHANGELOG.md) · [Validação](docs/VALIDACAO.md).
 
-## Rodando localmente
-
-Precisa de Docker. Nenhuma chave ou conta externa.
+Precisa de **Node 22.13+** (o CI usa Node 24). Não há build.
 
 ```bash
 git clone https://github.com/ArthurGoon/Vigil.git
 cd Vigil
-docker compose up --build
-```
-
-Isso sobe Postgres, aplica as migrations e inicia API e worker. Abra http://localhost:3000, clique em **Entrar** e informe qualquer e-mail. Sem `RESEND_API_KEY`, o link de acesso aparece na própria tela de login (e no log da API) e os alertas saem no log do worker e no painel.
-
-Sem Docker para a aplicação (só o Postgres no Docker, ou um Postgres seu via `DATABASE_URL`), com Node 20+:
-
-```bash
-docker compose up -d postgres
 npm ci
-npm run db:migrate
-npm run dev        # terminal 1: API em http://localhost:3000
-npm run worker     # terminal 2
+npm start
 ```
 
-### Teste rápido com uma página local
+Abra [localhost:3000](http://localhost:3000). Para criar sem extensão, clique em **Novo alerta**, preencha a URL e o trecho, escolha o modo e salve. No modo “mudar”, um seletor CSS restringe a comparação ao elemento inteiro; sem seletor, compara uma janela ao redor do texto.
+
+Mantenha o processo rodando para as checagens acontecerem. Se o computador desligar ou dormir, o Vigil só volta a checar quando o processo retomar. Pare com `Ctrl+C`: ele espera as checagens em andamento antes de fechar o banco.
+
+### Extensão do Chrome
+
+1. Abra `chrome://extensions` e ative **Modo do desenvolvedor**.
+2. Clique em **Carregar sem compactação** e escolha a pasta `extension/` do clone. Também é possível baixar e extrair o ZIP da extensão na [release v2.0.0](https://github.com/ArthurGoon/Vigil/releases/tag/v2.0.0), escolhendo a pasta extraída. O servidor Node continua necessário.
+3. Com o servidor rodando, abra um site, clique no ícone da extensão e em **Circular algo nesta página**. Também há o atalho `Alt+Shift+V` e a opção no menu do botão direito.
+4. Circule o trecho. O cartão mostra o que será monitorado; **Maior/Menor** ajustam o elemento.
+5. Escolha mudar/aparecer/sumir e clique em **Vigiar**. A primeira leitura cria a referência, sem disparar alerta.
+
+Antes de salvar, a extensão consulta o servidor para conferir se ele consegue ler o trecho. Isso ajuda a identificar páginas que dependem de JavaScript ou bloqueiam acesso automático. O popup permite pausar, retomar, checar agora e abrir o painel. As notificações dependem do Chrome aberto e das permissões do sistema; a extensão consulta novidades a cada minuto.
+
+### Demonstração local
+
+Em outro terminal, sirva as páginas fictícias:
 
 ```bash
-mkdir -p /tmp/vigil-demo && cp fixtures/sample.html /tmp/vigil-demo/
-python3 -m http.server 8080 -d /tmp/vigil-demo
+python3 -m http.server 8080 --bind 127.0.0.1 --directory fixtures/demo
 ```
 
-1. No painel, crie um alerta para `http://localhost:8080/sample.html` com o trecho `Backend Engineer`, seletor `#job-list`, modo "Texto mudou". Se a API estiver no Docker, use `http://host.docker.internal:8080/sample.html` (dentro do container, `localhost` é o próprio container).
-2. O worker faz o primeiro check em segundos. Esse primeiro check é só a linha de base.
-3. Edite `/tmp/vigil-demo/sample.html` (troque `Data Analyst` por outro cargo) e clique em **Testar agora** (ou espere o intervalo).
-4. O alerta fica `changed`, o diff aparece em "Últimas mudanças" e o aviso sai no console.
+Abra [o produto de demonstração](http://127.0.0.1:8080/produto.html) e circule o preço. Edite o preço no HTML, depois clique em **Checar agora** no Vigil. Há também `vagas.html` para experimentar os modos de presença. Os arquivos são exemplos; não representam lojas, vagas ou clientes reais.
 
-### Extensão Chrome
+### Atualizar da versão anterior
 
-1. `chrome://extensions` → Modo do desenvolvedor → **Carregar sem compactação** → pasta `extension/`.
-2. Abra o painel do Vigil, informe o e-mail e clique em **Enviar link mágico**. Em modo local o token é preenchido sozinho; clique em **Entrar com token**.
-3. Em qualquer página: **Ativar caneta**, circule o trecho e confirme o alerta.
+A v2 substitui a arquitetura com Postgres, login e processos separados por um servidor local com SQLite. Instale esta versão em uma pasta nova e preserve o banco/configuração antigos se precisar deles. Não há migração automática de alertas do Postgres para SQLite. Se já usa a versão com SQLite, mantenha a pasta `data/` e recarregue a extensão após atualizar os arquivos.
 
-## Testes
+## Dados e configuração
+
+O banco é criado automaticamente em `data/vigil.db`, ignorado pelo Git. As migrations rodam na inicialização. Para fazer backup, pare o Vigil e copie a pasta `data/`; para restaurar, devolva essa pasta com o processo parado.
+
+| Variável | Padrão | Uso |
+|---|---|---|
+| `PORT` | `3000` | Porta do painel/API |
+| `VIGIL_DB` | `data/vigil.db` | Caminho do banco SQLite |
+| `VIGIL_MIN_INTERVAL` | `5` | Intervalo mínimo em minutos |
+| `VIGIL_CHECK_COOLDOWN` | `10` | Espera entre checagens manuais, em segundos |
+| `VIGIL_CONCURRENCY` | `3` | Checagens agendadas simultâneas |
+| `VIGIL_POLL_MS` | `5000` | Frequência do agendador, em milissegundos |
+
+Exemplo: `PORT=3001 npm start`. Se trocar a porta, ajuste também **Servidor** no rodapé do popup da extensão. As variáveis são lidas do ambiente do processo; não há carregamento automático de `.env`.
+
+A API escuta somente em `127.0.0.1`. Sem login, o acesso é destinado à própria máquina; o middleware verifica host e origem para bloquear chamadas de outros sites. Não exponha esta versão como um serviço público.
+
+## Como funciona
+
+```text
+extensão Chrome (caneta e notificações) ─┐
+                                       ├─ API Hono ─ SQLite
+painel web (HTML/CSS/JS) ────────────────┘      │
+                                              └─ agendador ─ fetch HTTP/2 + Cheerio
+                                                                │
+                                              observação ─ comparação ─ histórico
+```
+
+- **Primeira leitura como referência.** Sem alerta na criação. As leituras seguintes comparam com o último estado salvo.
+- **Alerta por transição.** “Aparecer” só dispara de ausente para presente; “sumir”, de presente para ausente. Mudar outras partes da página não dispara esses modos.
+- **Comparação normalizada.** Espaços, quebras de linha e caixa não geram mudanças falsas. O modo “mudar” usa o texto do seletor ou uma janela de 80 caracteres ao redor do trecho.
+- **Checagem única por alerta.** O agendador e o botão manual compartilham o controle das requisições em andamento. O agendador reserva os alertas vencidos com uma atualização atômica no SQLite e um lease de 120 s.
+- **Edição durante uma requisição.** Um resultado do endereço/trecho antigo não substitui a referência nem o estado de erro do novo alvo.
+- **Falhas visíveis.** HTTP 404/503 e falhas de rede viram erro, sem comparar a página de erro com o trecho. O intervalo de novas tentativas cresce até 24 h (ou até o próprio intervalo, se ele for maior).
+- **Retenção limitada.** Até 20 snapshots e 200 mudanças por alerta. Snapshot guarda o texto observado, não o HTML inteiro.
+- **Webhook opcional.** Defina no editor uma URL que recebe um POST JSON por mudança, com uma segunda tentativa se falhar. O histórico permanece salvo mesmo se o webhook falhar.
+
+## Testar
 
 ```bash
+npm run check
 npm run typecheck
 npm test
+npm run test:e2e
 ```
 
-Os testes unitários cobrem extração e normalização de HTML, diff, os três modos de alerta (linha de base, mudança, aparecer, sumir, ruído fora do seletor) e o agendamento (intervalo, backoff, cooldown do check manual).
+Os testes automatizados de backend cobrem os três modos, extração e diff, API com servidor HTTP local real, SQLite, agendamento, cooldown, edição durante requisições e criação quando já há outros alertas vencidos.
 
-O teste do `SKIP LOCKED` precisa de um Postgres de verdade e só roda com `TEST_DATABASE_URL` apontando para um banco de teste (ele apaga a tabela `watches`):
+O ponta a ponta precisa de Google Chrome/Chromium; use `CHROME_PATH=/caminho/do/chrome npm run test:e2e` se necessário. Ele sobe servidor e banco temporários, usa uma página local editável, desenha com a caneta da extensão, cria os três modos, verifica o histórico, o cursor de notificações e o popup, recarrega o painel e confere busca, filtros, modos claro/escuro, navegação móvel e confirmação de exclusão com retorno do foco. Não usa o banco pessoal nem serviços externos. Imagens, logs e `checks.json` ficam na pasta temporária indicada ao terminar. A entrega visual das notificações pelo sistema operacional requer conferência manual.
 
-```bash
-docker compose exec postgres createdb -U vigil vigil_test
-DATABASE_URL=postgres://vigil:vigil@localhost:5432/vigil_test npm run db:migrate
-TEST_DATABASE_URL=postgres://vigil:vigil@localhost:5432/vigil_test npm test
-```
+O registro desta revisão está em [docs/VALIDACAO.md](docs/VALIDACAO.md).
 
-O CI (`.github/workflows/ci.yml`) roda typecheck, migrations e todos os testes, incluindo esse, com um Postgres de serviço.
-
-## Decisões de projeto
-
-**Worker com `FOR UPDATE SKIP LOCKED` e lease.** O worker faz um único `UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED LIMIT n)` que empurra `next_check_at` 60s para frente. Vários workers podem rodar ao mesmo tempo sem pegar o mesmo alerta e sem fila externa: o próprio Postgres é a fila. Se um worker morrer no meio do check, o alerta volta a vencer quando o lease expira. Ao terminar, o check grava o `next_check_at` real. O teste `src/worker/claim.test.ts` dispara três claims concorrentes e confere que nenhum alerta sai duplicado.
-
-**O que é comparado é a observação, não a página.** Cada modo gera uma chave SHA-256 diferente:
-- `text_changed`: hash do texto do elemento (com seletor) ou de uma janela de 80 caracteres em volta do trecho (sem seletor). Mudanças fora do seletor não disparam nada.
-- `text_appears` / `text_disappears`: hash só do "está presente ou não". Edições em outras partes da página não mudam a chave.
-
-Antes do hash o texto passa por normalização: remove `script`, `style`, `nav`, `header`, `footer` e afins, separa blocos (HTML minificado não vira "AB"), apara cada linha e ignora maiúsculas e minúsculas. Assim reindentação ou espaço extra não viram alerta falso. O snapshot guarda só um JSON pequeno com o trecho, não o HTML.
-
-**Alerta por transição, não por estado.** O primeiro check é linha de base e nunca alerta. "Apareceu" só dispara na passagem ausente → presente, "sumiu" só na passagem presente → ausente. Se o seletor salvo pela extensão deixa de existir nesses modos, a busca cai para a página inteira: elemento removido conta como "sumiu", elemento que só mudou de lugar não.
-
-**Lógica pura separada de I/O.** `observation.ts` e `schedule.ts` não tocam banco nem rede; `check.ts` só busca a página e persiste. Por isso dá para testar os modos com sequências de versões da página sem subir nada.
-
-**Erros e limites.** Resposta HTTP fora de 2xx é erro (uma página 404 não é comparada como se fosse conteúdo). Em erro, backoff exponencial a partir do intervalo do alerta, com teto de 24h. Limites fixos: HTML até 2 MB, texto até 100 mil caracteres, timeout de 15s, 20 snapshots por alerta, eventos retidos por 90 dias. Os limites de uso são configuráveis por variável de ambiente:
-
-| Variável | Padrão | Para quê |
-|---|---|---|
-| `MIN_INTERVAL_MINUTES` | 5 | intervalo mínimo entre checks |
-| `MANUAL_CHECK_COOLDOWN_SECONDS` | 30 | evita martelar o site com "Testar agora" |
-| `MAX_WATCHES_PER_USER` | 20 | alertas por usuário |
-| `WORKER_CONCURRENCY` / `WORKER_POLL_MS` | 3 / 5000 | tamanho do lote e frequência do worker |
-
-**Tokens nunca em texto puro.** Link mágico e sessão são guardados como SHA-256 com pepper (`SESSION_SECRET`). IP e user agent dos eventos de analytics também ficam só em hash. CORS aceita credenciais só da própria origem e da extensão.
-
-**Analytics em SQL.** Eventos de produto (`page_view`, `watch_created`, `watch_change_detected` etc.) vão para a tabela `events`, com nomes validados contra uma lista fixa. As views em `sql/analytics_views.sql` montam funil diário e tempo na página (média e p50).
-
-## Limitações conhecidas
-
-- Sem navegador headless: páginas que só renderizam o conteúdo via JavaScript não funcionam (o check usa `fetch` + cheerio).
-- No modo "texto mudou" sem seletor, a janela de 80 caracteres em volta do trecho faz mudanças vizinhas também dispararem alerta.
-- O seletor gerado pela extensão é um caminho CSS; se o layout da página muda, o modo "texto mudou" entra em erro (com backoff) até o alerta ser recriado.
-- Não consulta `robots.txt`.
-- Webhook tem duas tentativas na hora; não existe fila de reentrega.
-- Pensado para uso local, de uma pessoa. Não tem deploy nem endurecimento para produção.
-
-## Opcional: e-mail e login com Google
-
-Nada disso é necessário para rodar. Coloque as variáveis num `.env` (veja `.env.example`); o `docker compose` repassa essas variáveis aos containers.
-
-- **E-mail real (Resend):** defina `RESEND_API_KEY` e `MAGIC_LINK_FROM`. Link de login e alertas passam a ir por e-mail em vez do console.
-- **Login com Google:** crie um OAuth Client ID do tipo "Web application" no Google Cloud Console, com redirect `http://localhost:3000/auth/google/callback` (e `https://<ID-DA-EXTENSAO>.chromiumapp.org/` para a extensão). Defina `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET`. O botão "Continuar com Google" só aparece quando essas variáveis existem.
-
-## API
+## API local
 
 | Método | Rota | Uso |
 |---|---|---|
-| POST | `/auth/magic-link` | pede link de login (em modo local devolve `devLink`) |
-| POST | `/auth/exchange` | troca o token do link por sessão (Bearer) |
-| GET | `/auth/callback?token=` | login pelo navegador (cookie) |
-| GET, POST | `/watches` | lista / cria alertas |
-| PATCH, DELETE | `/watches/:id` | edita / remove (mudar URL, trecho, seletor ou modo reinicia a linha de base) |
-| POST | `/watches/:id/check` | check manual |
-| GET | `/watches/:id/changes` | mudanças detectadas, com diff |
-| GET | `/watches/:id/snapshots` | snapshots |
-| GET | `/limits` | limites em vigor |
-| POST | `/ingest/events` | eventos de analytics do front |
+| GET | `/api/health` | Saúde, intervalo mínimo e novidades |
+| GET, POST | `/api/watches` | Listar / criar e fazer a primeira leitura |
+| GET, PATCH, DELETE | `/api/watches/:id` | Ler / editar / excluir |
+| POST | `/api/watches/:id/check` | Checagem manual |
+| GET | `/api/watches/:id/changes` | Histórico com diff |
+| POST | `/api/watches/:id/seen` | Marcar mudanças do alerta como vistas |
+| GET | `/api/changes?after=0&limit=20` | Feed de novidades |
+| POST | `/api/changes/seen` | Marcar todas como vistas |
+| POST | `/api/probe` | Conferir texto e seletores antes de salvar |
 
-Exemplo com curl:
+## Limites atuais
 
-```bash
-curl -s -X POST localhost:3000/auth/magic-link -H 'content-type: application/json' \
-  -d '{"email":"voce@exemplo.com"}'                       # copie o token do devLink
-curl -s -X POST localhost:3000/auth/exchange -H 'content-type: application/json' \
-  -d '{"token":"TOKEN"}'                                  # devolve sessionToken
-curl -s -X POST localhost:3000/watches -H 'content-type: application/json' \
-  -H 'Authorization: Bearer SESSION' \
-  -d '{"url":"http://localhost:8080/sample.html","targetText":"ML Engineer","monitorMode":"text_appears","intervalMinutes":15}'
+- O servidor lê o HTML recebido. Não executa o JavaScript do site nem usa a sessão de login do navegador. Páginas autenticadas, desafios antirobô ou conteúdo só renderizado por JavaScript podem falhar.
+- Seletores podem deixar de funcionar quando um site muda de layout. No modo “mudar”, isso gera um erro visível até o alerta ser editado; os modos de presença tentam a página inteira se o seletor desaparecer.
+- Sem seletor, mudanças vizinhas ao trecho também podem gerar alerta.
+- Texto comparado limitado a 100 mil caracteres; timeout de 15 s e limite de HTML de 3 MB.
+- Notificações dependem de Chrome e Vigil em execução. Não há fila persistente de reentrega de webhooks, sincronização entre dispositivos nem consulta a `robots.txt`.
+
+## Estrutura
+
+```text
+src/app.ts              API e arquivos estáticos
+src/index.ts            inicialização e encerramento
+src/scheduler.ts        checagens agendadas
+src/db/store.ts         SQLite, migrations e retenção
+src/domain/             CRUD, observação, checagem e prévia
+src/lib/                HTTP/HTML, diff e webhook
+web/                    painel sem framework
+extension/              extensão Chrome MV3
+fixtures/               páginas fictícias para testes e demo
+scripts/                teste ponta a ponta com Chrome
 ```
 
-## Stack
+## Contribuir e relatar problemas
 
-TypeScript, Node 20+, Hono, Postgres 16, Drizzle, postgres.js, Cheerio, Zod, `node:test`. Front em HTML/CSS/JS sem framework. Extensão Chrome MV3.
+Veja [CONTRIBUTING.md](CONTRIBUTING.md). Ao abrir uma issue, informe o modo de alerta, versão do Node/Chrome e passos para reproduzir. Prefira exemplos públicos ou as fixtures, sem incluir dados pessoais.
+
+## Licença
+
+Código sob [MIT](LICENSE). A fonte Inter incluída usa a [SIL Open Font License](web/fonts/OFL.txt).

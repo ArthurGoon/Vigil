@@ -19,7 +19,7 @@ export async function deliverWebhook(
     try {
       const res = await fetch(webhookUrl, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "User-Agent": "Vigil/1.0" },
+        headers: { "Content-Type": "application/json", "User-Agent": "Vigil/2.0" },
         body,
         signal: AbortSignal.timeout(10_000),
       });
